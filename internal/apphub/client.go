@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -181,6 +182,58 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 	return nil
 }
 
+// downloadFile issues a GET request against path and returns the raw
+// response body, for endpoints that return a binary file rather than the
+// usual JSON envelope. It logs in first if there is no cached token yet,
+// and retries once after a fresh login on 401/403.
+func (c *Client) downloadFile(path string) ([]byte, error) {
+	if c.token == "" {
+		if err := c.login(); err != nil {
+			return nil, err
+		}
+	}
+
+	doOnce := func() (*http.Response, []byte, error) {
+		req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Header.Set("accesstoken", c.token)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		return resp, data, nil
+	}
+
+	resp, data, err := doOnce()
+	if err != nil {
+		return nil, fmt.Errorf("apphub: download %s failed: %w", path, err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if err := c.login(); err != nil {
+			return nil, err
+		}
+		resp, data, err = doOnce()
+		if err != nil {
+			return nil, fmt.Errorf("apphub: download %s failed: %w", path, err)
+		}
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: string(data)}
+	}
+	return data, nil
+}
+
 // ListDevices returns every device registered on the server.
 func (c *Client) ListDevices() ([]Device, error) {
 	var devices []Device
@@ -200,6 +253,52 @@ func (c *Client) ListDevicesByGroup(groupName string) ([]Device, error) {
 	return devices, nil
 }
 
+// ListDevicesByCondition returns devices filtered dynamically by online
+// status and/or group. online is optional: pass nil for both online and
+// offline devices, a pointer to true for online-only, or a pointer to
+// false for offline-only. groupName, os, and labelName are optional
+// exact-match filters; pass "" to leave any of them unset.
+func (c *Client) ListDevicesByCondition(online *bool, groupName, os, labelName string) ([]Device, error) {
+	q := url.Values{}
+	if online != nil {
+		q.Set("status", strconv.FormatBool(*online))
+	}
+	if groupName != "" {
+		q.Set("groupname", groupName)
+	}
+	if os != "" {
+		q.Set("os", os)
+	}
+	if labelName != "" {
+		q.Set("labelName", labelName)
+	}
+
+	var resp devicesByConditionResponse
+	if err := c.do(http.MethodGet, "/api/devicemgr/allDeviceByCondition?"+q.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// ListAlarmDevices returns devices currently in an alarm state (software or
+// hardware status not "normal" - deviceStatus is the server's precomputed
+// combined status: 0=normal, 1=error, 2=warning), optionally scoped to one
+// device group.
+func (c *Client) ListAlarmDevices(groupName string) ([]Device, error) {
+	devices, err := c.ListDevicesByCondition(nil, groupName, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	alarms := make([]Device, 0)
+	for _, d := range devices {
+		if d.DeviceStatus != 0 {
+			alarms = append(alarms, d)
+		}
+	}
+	return alarms, nil
+}
+
 // GetDevice returns the details of a single device.
 func (c *Client) GetDevice(agentID string) (*Device, error) {
 	var device Device
@@ -208,6 +307,27 @@ func (c *Client) GetDevice(agentID string) (*Device, error) {
 		return nil, err
 	}
 	return &device, nil
+}
+
+// GetDeviceDetails returns a device's detailed system info (cpu, memory,
+// storage, network interfaces, etc), as reported by its agent. This is a
+// lighter-weight alternative to GetDevice for when only that blob is
+// needed - not documented in AppHub-v2.3.0.md, see ClientServlet's
+// get_1_details.
+func (c *Client) GetDeviceDetails(deviceID string) (json.RawMessage, error) {
+	q := url.Values{}
+	q.Set("deviceId", deviceID)
+
+	var resp struct {
+		Details string `json:"details"`
+	}
+	if err := c.do(http.MethodGet, "/api/devicemgr/details?"+q.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Details == "" {
+		return nil, nil
+	}
+	return json.RawMessage(resp.Details), nil
 }
 
 // DeleteDevice removes a device from the server.
@@ -240,6 +360,16 @@ func (c *Client) MonitorData(agentID, dataType string, beginTs, endTs int64) ([]
 		return nil, err
 	}
 	return points, nil
+}
+
+// CreateGroup adds a new device group. groupType is typically one of
+// "linux", "windows", "android", "mix" (the server's built-in defaults),
+// though this isn't a strictly enforced enum. username is recorded as the
+// group's creator.
+func (c *Client) CreateGroup(groupName, desc, groupType, username string) error {
+	body := createGroupRequest{GroupName: groupName, Desc: desc, Type: groupType, Username: username}
+	var sr statusResponse
+	return c.do(http.MethodPost, "/api/groupmgr", body, &sr)
 }
 
 // ListGroups returns every device group defined on the server.
@@ -420,4 +550,322 @@ func (c *Client) SetVolume(agentID string, volume int) error {
 // relying on it.
 func (c *Client) SetBacklight(agentID string, brightness int) error {
 	return c.execAction(agentID, map[string]interface{}{"brightness": brightness})
+}
+
+// getPluginAction issues a devicecontrol "read" action against resource
+// 40008/0/27600 (the GET counterpart of execAction's 27601), returning the
+// raw content.value string for the caller to decode. See DeviceLink's
+// restfulapi/pluginsApi.js getDeviceStatus and AppHub-v2.3.0.md "GET 获取USB状态".
+func (c *Client) getPluginAction(agentID string, actionsJSON string) (string, error) {
+	q := url.Values{}
+	q.Set("pluginname", "devicecontrol")
+	q.Set("actions", actionsJSON)
+	path := fmt.Sprintf("/api/plugins/%s/40008/0/27600?%s", url.PathEscape(agentID), q.Encode())
+
+	var cr contentResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return "", err
+	}
+	return cr.Content.Value, nil
+}
+
+// GetThresholds returns the device's current monitoring threshold
+// configuration for CPU/memory/storage/network/battery metrics.
+func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
+	raw, err := c.getPluginAction(agentID, `{"get_threshold":true}`)
+	if err != nil {
+		return nil, err
+	}
+
+	settings := make([]ThresholdSetting, 0, len(thresholdMetrics))
+	if raw == "" {
+		return settings, nil
+	}
+
+	var m map[string]rawThresholdSetting
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, fmt.Errorf("apphub: decode thresholds: %w", err)
+	}
+
+	for _, metric := range thresholdMetrics {
+		v, ok := m[metric]
+		if !ok {
+			continue
+		}
+		warn, _ := v.Warn.Float64()
+		errVal, _ := v.Error.Float64()
+		settings = append(settings, ThresholdSetting{
+			Metric:  metric,
+			Enabled: v.Status == "true",
+			Warn:    warn,
+			Error:   errVal,
+		})
+	}
+	return settings, nil
+}
+
+// SetThreshold enables/disables alerting for metric and sets its warn/error
+// levels. metric must be one of: cpu_temp, cpu_usage, memory_usage,
+// storage_usage, battery_available, network_upload_speed,
+// network_download_speed.
+func (c *Client) SetThreshold(agentID, metric string, enabled bool, warn, errorLevel float64) error {
+	if !settableThresholdMetrics[metric] {
+		return fmt.Errorf("apphub: unsupported threshold metric %q", metric)
+	}
+	entry := map[string]interface{}{
+		metric:  enabled,
+		"warn":  warn,
+		"error": errorLevel,
+	}
+	return c.execAction(agentID, map[string]interface{}{
+		"set_threshold": []map[string]interface{}{entry},
+	})
+}
+
+// SetMonitorEnabled turns the device's overall hardware monitoring
+// (CPU/memory/storage/network/battery threshold alerting) on or off.
+func (c *Client) SetMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{"set_isMonitor": enabled})
+}
+
+// ListProcesses returns the running processes/threads on a Windows or Linux
+// device, including whether each is currently being monitored.
+func (c *Client) ListProcesses(agentID string) ([]ProcessInfo, error) {
+	raw, err := c.getPluginAction(agentID, `{"get_software_info":true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return []ProcessInfo{}, nil
+	}
+
+	var procs []ProcessInfo
+	if err := json.Unmarshal([]byte(raw), &procs); err != nil {
+		return nil, fmt.Errorf("apphub: decode process list: %w", err)
+	}
+	return procs, nil
+}
+
+// SetProcessMonitorEnabled turns application/process monitoring on or off.
+func (c *Client) SetProcessMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{"set_isProcessMonitor": enabled})
+}
+
+// GetDockerInfo returns the Docker compose/swarm/image groups deployed on a
+// device, including each container's running status.
+func (c *Client) GetDockerInfo(agentID string) ([]DockerGroup, error) {
+	path := fmt.Sprintf("/api/devicemgr/%s/60001/0/27300", url.PathEscape(agentID))
+	var cr contentResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if cr.Content.Value == "" {
+		return []DockerGroup{}, nil
+	}
+
+	var resp dockerInfoResponse
+	if err := json.Unmarshal([]byte(cr.Content.Value), &resp); err != nil {
+		return nil, fmt.Errorf("apphub: decode docker info: %w", err)
+	}
+	return resp.Data, nil
+}
+
+// SetDockerMonitorEnabled turns Docker container monitoring on or off.
+func (c *Client) SetDockerMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{"set_isDockerMonitor": enabled})
+}
+
+// GetUSBMonitorEnabled reports whether USB peripheral change monitoring
+// (alerting on USB connect/disconnect) is enabled.
+func (c *Client) GetUSBMonitorEnabled(agentID string) (bool, error) {
+	raw, err := c.getPluginAction(agentID, `{"get_usb_change":true}`)
+	if err != nil {
+		return false, err
+	}
+	if raw == "" {
+		return false, nil
+	}
+
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return false, fmt.Errorf("apphub: decode usb monitor status: %w", err)
+	}
+	return m["get_usb_change"] == "true", nil
+}
+
+// SetUSBMonitorEnabled turns USB peripheral change monitoring on or off.
+func (c *Client) SetUSBMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{
+		"set_peripheral_monitor": []map[string]interface{}{{"usb_change": enabled}},
+	})
+}
+
+// GetUSBStorageEnabled reports whether USB mass-storage access is
+// currently enabled on the device (distinct from GetUSBMonitorEnabled,
+// which is about change-alerting, not the storage toggle itself).
+func (c *Client) GetUSBStorageEnabled(agentID string) (bool, error) {
+	q := url.Values{}
+	q.Set("pluginname", "devicecontrol")
+	// Any actions value other than the special-cased "get_usb_status" /
+	// "get_usb_change" / "get_threshold" / "get_software_info" /
+	// "get_docker_info" strings makes the server fall through to a plain
+	// LwM2M read of resource 27600, which is the USB-storage-enabled flag.
+	q.Set("actions", `{"get_usb_storage_status":true}`)
+	path := fmt.Sprintf("/api/plugins/%s/40008/0/27600?%s", url.PathEscape(agentID), q.Encode())
+
+	var cr contentBoolResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return false, err
+	}
+	return cr.Content.Value, nil
+}
+
+// SetUSBStorageEnabled enables or disables USB mass-storage access on the device.
+func (c *Client) SetUSBStorageEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{"usb_storage_status": enabled})
+}
+
+// SyncTime triggers an immediate clock sync on the device.
+//
+// NOTE: not documented in AppHub-v2.3.0.md; inferred from the "syncTime"
+// action key handled by DeviceLink's PluginsServlet for batch operations.
+// It is not specially handled in the single-device write path either, so
+// it should pass through to the device as-is, but hasn't been verified
+// against real firmware.
+func (c *Client) SyncTime(agentID string) error {
+	return c.execAction(agentID, map[string]interface{}{"syncTime": true})
+}
+
+// --- system log ------------------------------------------------------------
+
+// ListSystemLogs returns a page of device system log entries. Any of
+// deviceID, os, keywords may be empty to leave that filter unset; beginTs/
+// endTs are Unix milliseconds, pass 0 to omit either bound.
+func (c *Client) ListSystemLogs(currentPage, limit int, deviceID, os, keywords string, beginTs, endTs int64) ([]SystemLogEntry, error) {
+	q := url.Values{}
+	q.Set("currentpage", fmt.Sprintf("%d", currentPage))
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if deviceID != "" {
+		q.Set("agentId", deviceID)
+	}
+	if os != "" {
+		q.Set("os", os)
+	}
+	if keywords != "" {
+		q.Set("keywords", keywords)
+	}
+	if beginTs > 0 {
+		q.Set("beginTs", fmt.Sprintf("%d", beginTs))
+	}
+	if endTs > 0 {
+		q.Set("endTs", fmt.Sprintf("%d", endTs))
+	}
+
+	var logs []SystemLogEntry
+	if err := c.do(http.MethodGet, "/api/systemLog/bypage?"+q.Encode(), nil, &logs); err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+// DeleteSystemLog deletes a single system log entry by id.
+func (c *Client) DeleteSystemLog(id int64) error {
+	return c.do(http.MethodDelete, fmt.Sprintf("/api/systemLog/%d", id), nil, nil)
+}
+
+// DeleteSystemLogsByDevice deletes every system log entry for a device.
+func (c *Client) DeleteSystemLogsByDevice(deviceID string) error {
+	return c.do(http.MethodPost, "/api/systemLog/deleteByDeviceId", deleteByDeviceIDRequest{DeviceID: deviceID}, nil)
+}
+
+// BatchDeleteSystemLogs deletes multiple system log entries by id.
+func (c *Client) BatchDeleteSystemLogs(ids []int64) error {
+	return c.do(http.MethodPost, "/api/systemLog/batchDelete", batchIDsRequest{IDs: ids}, nil)
+}
+
+// --- operation records ------------------------------------------------------
+
+// ListOperationRecords returns a page of admin operation-record (audit
+// log) entries. target is an optional "contains" filter; beginTs/endTs are
+// Unix milliseconds, pass 0 to omit either bound. This endpoint is not
+// documented in AppHub-v2.3.0.md - see OperationRecordServlet.java.
+func (c *Client) ListOperationRecords(currentPage, limit int, target string, beginTs, endTs int64) ([]OperationRecord, error) {
+	q := url.Values{}
+	q.Set("currentPage", fmt.Sprintf("%d", currentPage))
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if target != "" {
+		q.Set("target", target)
+	}
+	if beginTs > 0 {
+		q.Set("beginTs", fmt.Sprintf("%d", beginTs))
+	}
+	if endTs > 0 {
+		q.Set("endTs", fmt.Sprintf("%d", endTs))
+	}
+
+	var page operationRecordsPageResponse
+	if err := c.do(http.MethodGet, "/api/records/byPage?"+q.Encode(), nil, &page); err != nil {
+		return nil, err
+	}
+
+	records := make([]OperationRecord, 0)
+	if page.Data != "" {
+		if err := json.Unmarshal([]byte(page.Data), &records); err != nil {
+			return nil, fmt.Errorf("apphub: decode operation records: %w", err)
+		}
+	}
+	return records, nil
+}
+
+// DeleteOperationRecord deletes a single operation record by id.
+func (c *Client) DeleteOperationRecord(id int64) error {
+	return c.do(http.MethodDelete, fmt.Sprintf("/api/records/%d", id), nil, nil)
+}
+
+// DeleteAllOperationRecords clears every operation record.
+func (c *Client) DeleteAllOperationRecords() error {
+	return c.do(http.MethodDelete, "/api/records/all", nil, nil)
+}
+
+// BatchDeleteOperationRecords deletes multiple operation records by id.
+func (c *Client) BatchDeleteOperationRecords(ids []int64) error {
+	return c.do(http.MethodPost, "/api/records/batchDelete", batchIDsRequest{IDs: ids}, nil)
+}
+
+// --- agent (client) log ------------------------------------------------------
+
+// RequestAgentLogUpload asks a device's agent to upload its client log to
+// callbackURL (must be an address the device can reach, running an HTTP
+// server that accepts the agent's upload - this CLI does not provide one).
+// actionID should be a fresh unique string; poll GetAgentLogStatus with the
+// same value, then call DownloadAgentLog once it reports "success".
+func (c *Client) RequestAgentLogUpload(agentID, callbackURL, actionID string) error {
+	valueBytes, err := json.Marshal(agentLogRequestValue{Address: callbackURL, ActionID: actionID})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/devicemgr/%s/40001/0/27012", url.PathEscape(agentID))
+	body := execActionRequest{ID: 27012, Value: string(valueBytes)}
+	var sr statusResponse
+	return c.do(http.MethodPut, path, body, &sr)
+}
+
+// GetAgentLogStatus polls the status of a previously requested agent log
+// upload (see RequestAgentLogUpload).
+func (c *Client) GetAgentLogStatus(actionID string) (*logStatusResponse, error) {
+	q := url.Values{}
+	q.Set("actionId", actionID)
+	var status logStatusResponse
+	if err := c.do(http.MethodGet, "/api/devicemgr/logStatus?"+q.Encode(), nil, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+// DownloadAgentLog downloads a device's uploaded client log (see
+// RequestAgentLogUpload/GetAgentLogStatus) as a zip/log file. The server
+// deletes the file after serving it, so it can only be downloaded once.
+func (c *Client) DownloadAgentLog(agentID string) ([]byte, error) {
+	path := fmt.Sprintf("/api/devicemgr/agentLog/%s", url.PathEscape(agentID))
+	return c.downloadFile(path)
 }

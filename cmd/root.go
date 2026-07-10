@@ -6,16 +6,18 @@ import (
 
 	"github.com/gangqiang01/EIM-SKILL/internal/apphub"
 	"github.com/gangqiang01/EIM-SKILL/internal/config"
+	"github.com/gangqiang01/EIM-SKILL/internal/ithings"
 	"github.com/gangqiang01/EIM-SKILL/internal/repo"
 	"github.com/spf13/cobra"
 )
 
 var (
-	cfgFile     string
-	baseURL     string
-	username    string
-	password    string
-	repoBaseURL string
+	cfgFile        string
+	baseURL        string
+	username       string
+	password       string
+	repoBaseURL    string
+	ithingsBaseURL string
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +38,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&username, "username", "", "login username (overrides config file)")
 	rootCmd.PersistentFlags().StringVar(&password, "password", "", "login password (overrides config file)")
 	rootCmd.PersistentFlags().StringVar(&repoBaseURL, "repo-base-url", "", "repo server (m2m-management-edge) base URL (overrides config file, e.g. http://127.0.0.1:30001)")
+	rootCmd.PersistentFlags().StringVar(&ithingsBaseURL, "ithings-base-url", "", "ithings server (sub-device/data-forward) base URL (overrides config file, e.g. http://127.0.0.1:8082)")
 }
 
 // loadConfig loads configuration (file + env + flags, in increasing priority).
@@ -56,6 +59,9 @@ func loadConfig() (*config.Config, error) {
 	}
 	if repoBaseURL != "" {
 		cfg.RepoBaseURL = repoBaseURL
+	}
+	if ithingsBaseURL != "" {
+		cfg.IthingsBaseURL = ithingsBaseURL
 	}
 
 	return cfg, nil
@@ -78,6 +84,16 @@ func newRepoClient(appClient *apphub.Client) (*repo.Client, error) {
 		return nil, err
 	}
 	return repo.NewClient(cfg.RepoBaseURL, appClient), nil
+}
+
+// newIthingsClient loads configuration and returns an ithings server client
+// that authenticates by reusing appClient's AppHub session.
+func newIthingsClient(appClient *apphub.Client) (*ithings.Client, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return ithings.NewClient(cfg.IthingsBaseURL, appClient), nil
 }
 
 func fatalf(format string, args ...interface{}) {

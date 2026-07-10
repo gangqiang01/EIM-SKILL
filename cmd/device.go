@@ -17,6 +17,7 @@ func init() {
 	rootCmd.AddCommand(deviceCmd)
 	deviceCmd.AddCommand(deviceListCmd)
 	deviceCmd.AddCommand(deviceGetCmd)
+	deviceCmd.AddCommand(deviceDetailsCmd)
 	deviceCmd.AddCommand(deviceDeleteCmd)
 	deviceCmd.AddCommand(deviceAddToGroupCmd)
 	deviceCmd.AddCommand(deviceMonitorCmd)
@@ -26,6 +27,10 @@ func init() {
 	deviceCmd.AddCommand(deviceSetBacklightCmd)
 
 	deviceListCmd.Flags().String("group", "", "only list devices in this device group")
+	deviceListCmd.Flags().Bool("online", false, "only list online devices")
+	deviceListCmd.Flags().Bool("offline", false, "only list offline devices")
+	deviceListCmd.Flags().Bool("alarm", false, "only list devices currently in an alarm state (software/hardware status not normal)")
+	deviceListCmd.MarkFlagsMutuallyExclusive("online", "offline", "alarm")
 
 	deviceMonitorCmd.Flags().String("type", "", "monitor data type: cpu or memory (required)")
 	deviceMonitorCmd.Flags().Int64("begin", 0, "only return samples at or after this Unix millisecond timestamp")
@@ -41,15 +46,53 @@ func printJSON(v interface{}) {
 	fmt.Println(string(data))
 }
 
+// printRawJSON pretty-prints an already-encoded JSON payload (e.g. a
+// json.RawMessage passed straight through from the server), used for
+// responses we deliberately don't model with a Go struct.
+func printRawJSON(raw json.RawMessage) {
+	if len(raw) == 0 {
+		fmt.Println("null")
+		return
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		fmt.Println(string(raw))
+		return
+	}
+	printJSON(v)
+}
+
 var deviceListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all devices, or the devices in a given group",
+	Short: "List all devices, or filter by group / online / offline / alarm state",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		group, _ := cmd.Flags().GetString("group")
+		online, _ := cmd.Flags().GetBool("online")
+		offline, _ := cmd.Flags().GetBool("offline")
+		alarm, _ := cmd.Flags().GetBool("alarm")
 
 		client, err := newClient()
 		if err != nil {
 			return err
+		}
+
+		if alarm {
+			devices, err := client.ListAlarmDevices(group)
+			if err != nil {
+				return err
+			}
+			printJSON(devices)
+			return nil
+		}
+
+		if online || offline {
+			isOnline := online
+			devices, err := client.ListDevicesByCondition(&isOnline, group, "", "")
+			if err != nil {
+				return err
+			}
+			printJSON(devices)
+			return nil
 		}
 
 		if group != "" {
@@ -84,6 +127,24 @@ var deviceGetCmd = &cobra.Command{
 			return err
 		}
 		printJSON(device)
+		return nil
+	},
+}
+
+var deviceDetailsCmd = &cobra.Command{
+	Use:   "details <endpoint>",
+	Short: "Get a device's detailed system info (cpu, memory, storage, network interfaces, etc)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		details, err := client.GetDeviceDetails(args[0])
+		if err != nil {
+			return err
+		}
+		printRawJSON(details)
 		return nil
 	},
 }
