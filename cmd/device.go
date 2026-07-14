@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -16,6 +15,8 @@ var deviceCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(deviceCmd)
 	deviceCmd.AddCommand(deviceListCmd)
+	deviceCmd.AddCommand(deviceCountsCmd)
+	deviceCmd.AddCommand(deviceHealthCmd)
 	deviceCmd.AddCommand(deviceGetCmd)
 	deviceCmd.AddCommand(deviceDetailsCmd)
 	deviceCmd.AddCommand(deviceDeleteCmd)
@@ -36,30 +37,6 @@ func init() {
 	deviceMonitorCmd.Flags().Int64("begin", 0, "only return samples at or after this Unix millisecond timestamp")
 	deviceMonitorCmd.Flags().Int64("end", 0, "only return samples at or before this Unix millisecond timestamp")
 	_ = deviceMonitorCmd.MarkFlagRequired("type")
-}
-
-func printJSON(v interface{}) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fatalf("failed to render output: %v", err)
-	}
-	fmt.Println(string(data))
-}
-
-// printRawJSON pretty-prints an already-encoded JSON payload (e.g. a
-// json.RawMessage passed straight through from the server), used for
-// responses we deliberately don't model with a Go struct.
-func printRawJSON(raw json.RawMessage) {
-	if len(raw) == 0 {
-		fmt.Println("null")
-		return
-	}
-	var v interface{}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		fmt.Println(string(raw))
-		return
-	}
-	printJSON(v)
 }
 
 var deviceListCmd = &cobra.Command{
@@ -113,8 +90,44 @@ var deviceListCmd = &cobra.Command{
 	},
 }
 
+var deviceCountsCmd = &cobra.Command{
+	Use:   "counts",
+	Short: "Get the number of online and offline devices",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		counts, err := client.GetDeviceCounts()
+		if err != nil {
+			return err
+		}
+		printJSON(counts)
+		return nil
+	},
+}
+
+var deviceHealthCmd = &cobra.Command{
+	Use:   "health",
+	Short: "Get the status breakdown (normal/warning/error) of online devices",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		health, err := client.GetOnlineDeviceHealth()
+		if err != nil {
+			return err
+		}
+		printJSON(health)
+		return nil
+	},
+}
+
 var deviceGetCmd = &cobra.Command{
-	Use:   "get <endpoint>",
+	Use:   "get <endpoint-or-name>",
 	Short: "Get the details of a single device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -122,7 +135,11 @@ var deviceGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		device, err := client.GetDevice(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		device, err := client.GetDevice(endpoint)
 		if err != nil {
 			return err
 		}
@@ -132,7 +149,7 @@ var deviceGetCmd = &cobra.Command{
 }
 
 var deviceDetailsCmd = &cobra.Command{
-	Use:   "details <endpoint>",
+	Use:   "details <endpoint-or-name>",
 	Short: "Get a device's detailed system info (cpu, memory, storage, network interfaces, etc)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,7 +157,11 @@ var deviceDetailsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		details, err := client.GetDeviceDetails(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		details, err := client.GetDeviceDetails(endpoint)
 		if err != nil {
 			return err
 		}
@@ -150,7 +171,7 @@ var deviceDetailsCmd = &cobra.Command{
 }
 
 var deviceDeleteCmd = &cobra.Command{
-	Use:   "delete <endpoint>",
+	Use:   "delete <endpoint-or-name>",
 	Short: "Delete a device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -158,7 +179,11 @@ var deviceDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.DeleteDevice(args[0]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.DeleteDevice(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -167,7 +192,7 @@ var deviceDeleteCmd = &cobra.Command{
 }
 
 var deviceMonitorCmd = &cobra.Command{
-	Use:   "monitor <endpoint>",
+	Use:   "monitor <endpoint-or-name>",
 	Short: "Get CPU or memory monitoring data for a device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -179,7 +204,11 @@ var deviceMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		points, err := client.MonitorData(args[0], dataType, begin, end)
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		points, err := client.MonitorData(endpoint, dataType, begin, end)
 		if err != nil {
 			return err
 		}
@@ -189,7 +218,7 @@ var deviceMonitorCmd = &cobra.Command{
 }
 
 var deviceAddToGroupCmd = &cobra.Command{
-	Use:   "add-to-group <endpoint> <group-name>",
+	Use:   "add-to-group <endpoint-or-name> <group-name>",
 	Short: "Add a device to a device group (keeps its existing group memberships)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -197,8 +226,12 @@ var deviceAddToGroupCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
 
-		groups, err := client.AddDeviceToGroup(args[0], args[1])
+		groups, err := client.AddDeviceToGroup(endpoint, args[1])
 		if err != nil {
 			return err
 		}
@@ -211,7 +244,7 @@ var deviceAddToGroupCmd = &cobra.Command{
 }
 
 var deviceRebootCmd = &cobra.Command{
-	Use:   "reboot <endpoint>",
+	Use:   "reboot <endpoint-or-name>",
 	Short: "Reboot a device immediately",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -219,7 +252,11 @@ var deviceRebootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.Reboot(args[0]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.Reboot(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -228,7 +265,7 @@ var deviceRebootCmd = &cobra.Command{
 }
 
 var deviceShutdownCmd = &cobra.Command{
-	Use:   "shutdown <endpoint>",
+	Use:   "shutdown <endpoint-or-name>",
 	Short: "Shut down a device immediately",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -236,7 +273,11 @@ var deviceShutdownCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.Shutdown(args[0]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.Shutdown(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -245,7 +286,7 @@ var deviceShutdownCmd = &cobra.Command{
 }
 
 var deviceSetVolumeCmd = &cobra.Command{
-	Use:   "set-volume <endpoint> <0-100>",
+	Use:   "set-volume <endpoint-or-name> <0-100>",
 	Short: "Set a device's system audio volume (best effort, see NOTE in internal/apphub)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -258,7 +299,11 @@ var deviceSetVolumeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetVolume(args[0], volume); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetVolume(endpoint, volume); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -267,7 +312,7 @@ var deviceSetVolumeCmd = &cobra.Command{
 }
 
 var deviceSetBacklightCmd = &cobra.Command{
-	Use:   "set-backlight <endpoint> <0-100>",
+	Use:   "set-backlight <endpoint-or-name> <0-100>",
 	Short: "Set a device's screen backlight/brightness (best effort, see NOTE in internal/apphub)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -280,7 +325,11 @@ var deviceSetBacklightCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetBacklight(args[0], brightness); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetBacklight(endpoint, brightness); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})

@@ -16,28 +16,67 @@ type LinuxPackage struct {
 	Size        int64  `json:"size"`
 }
 
-// Storage is a storage backend configured on the repo server (m2m-management-edge
-// StorageController), used to store OTA packages, app icons, etc. GET /storage
-// never returns the secret key.
-type Storage struct {
-	SID       int64  `json:"sid"`
-	Type      string `json:"type"`
-	BlobURL   string `json:"bloburl"`
-	Bucket    string `json:"blobbucket"`
-	AccessKey string `json:"blobaccesskey"`
-	Choose    int    `json:"choose"` // 1 = active, 0 = inactive
-	Ts        int64  `json:"ts"`
+// AndroidApp is an Android APK package stored in the repo server (GET
+// /repoapps, RepoApp entity).
+type AndroidApp struct {
+	Raid        int64  `json:"raid"`
+	Filename    string `json:"filename"`
+	PkgName     string `json:"pkgname"`
+	VersionName string `json:"versionname"`
+	VersionCode string `json:"versioncode"`
+	Description string `json:"description"`
+	Address     string `json:"address"`
+	Tags        string `json:"tags"`
+	Size        int64  `json:"size"`
 }
 
-// addStorageRequest is the untyped body POST /storage expects; which fields
-// matter depends on Platform ("azure" uses Container+ConnectionString,
-// anything else - minio/s3/oss - uses BlobURL/Bucket/AccessKey/SecretKey).
-type addStorageRequest struct {
-	Platform         string `json:"platform"`
-	BlobURL          string `json:"bloburl,omitempty"`
-	Bucket           string `json:"bucket,omitempty"`
-	AccessKey        string `json:"accesskey,omitempty"`
-	SecretKey        string `json:"secretkey,omitempty"`
-	Container        string `json:"container,omitempty"`
-	ConnectionString string `json:"connectionString,omitempty"`
+// WindowsPackage is a Windows exe installer or zip/compressed package
+// stored in the repo server (GET /repoexe, /exeByType; RepoExe entity).
+// Type discriminates "exe" vs the zip variant; Tool ("Inno Setup"/"WiX
+// Toolset") only applies to exe packages.
+type WindowsPackage struct {
+	Reid        int64  `json:"reid"`
+	Filename    string `json:"filename"`
+	ProjectName string `json:"projectname"`
+	Version     string `json:"version"`
+	Tool        string `json:"tool"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Address     string `json:"address"`
+	Tags        string `json:"tags"`
+	Size        int64  `json:"size"`
+}
+
+// DockerContainerSpec is one container image inside a DockerComposePackage.
+type DockerContainerSpec struct {
+	Rdid      int64  `json:"rdid"`
+	Container string `json:"container"`
+	Image     string `json:"image"`
+	Version   string `json:"version"`
+}
+
+// DockerComposePackage is a docker-compose/swarm yaml stored in the repo
+// server (GET /repoDockerCompose - exact casing required by the server;
+// RepoDockerCompose entity). Tag is the package's product name.
+type DockerComposePackage struct {
+	Rdcid       int64                 `json:"rdcid"`
+	Tag         string                `json:"tag"`
+	Filename    string                `json:"filename"`
+	Version     string                `json:"version"`
+	Type        string                `json:"type"`
+	Description string                `json:"description"`
+	Address     string                `json:"address"`
+	Containers  []DockerContainerSpec `json:"repoDockers"`
+}
+
+// GeneralFile is a generic file stored in the repo server for file-deploy
+// (GET /repofiles/bytype?type=; RepoFile entity).
+type GeneralFile struct {
+	Rfid        int64  `json:"rfid"`
+	Filename    string `json:"filename"`
+	Type        string `json:"type"`
+	Format      string `json:"format"`
+	Description string `json:"description"`
+	Address     string `json:"address"`
+	Size        int64  `json:"size"`
 }

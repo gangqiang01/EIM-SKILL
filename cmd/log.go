@@ -58,7 +58,7 @@ func init() {
 
 	logSystemListCmd.Flags().Int("page", 1, "page number")
 	logSystemListCmd.Flags().Int("limit", 20, "page size")
-	logSystemListCmd.Flags().String("device-id", "", "only return entries for this device")
+	logSystemListCmd.Flags().String("device-id", "", "only return entries for this device (endpoint or device name)")
 	logSystemListCmd.Flags().String("os", "", "only return entries for this device OS")
 	logSystemListCmd.Flags().String("keywords", "", "filter by keywords")
 	logSystemListCmd.Flags().Int64("begin", 0, "only return entries at or after this Unix millisecond timestamp")
@@ -102,6 +102,12 @@ var logSystemListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if deviceID != "" {
+			deviceID, err = resolveDeviceEndpoint(client, deviceID)
+			if err != nil {
+				return err
+			}
+		}
 		logs, err := client.ListSystemLogs(page, limit, deviceID, os, keywords, begin, end)
 		if err != nil {
 			return err
@@ -133,7 +139,7 @@ var logSystemDeleteCmd = &cobra.Command{
 }
 
 var logSystemDeleteByDeviceCmd = &cobra.Command{
-	Use:   "delete-by-device <device-id>",
+	Use:   "delete-by-device <endpoint-or-name>",
 	Short: "Delete every system log entry for a device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -141,7 +147,11 @@ var logSystemDeleteByDeviceCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.DeleteSystemLogsByDevice(args[0]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.DeleteSystemLogsByDevice(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -254,7 +264,7 @@ var logOperationsBatchDeleteCmd = &cobra.Command{
 }
 
 var logAgentRequestCmd = &cobra.Command{
-	Use:   "request <endpoint> <callback-url> <action-id>",
+	Use:   "request <endpoint-or-name> <callback-url> <action-id>",
 	Short: "Ask a device's agent to upload its client log to callback-url",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -262,7 +272,11 @@ var logAgentRequestCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.RequestAgentLogUpload(args[0], args[1], args[2]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.RequestAgentLogUpload(endpoint, args[1], args[2]); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -289,20 +303,25 @@ var logAgentStatusCmd = &cobra.Command{
 }
 
 var logAgentDownloadCmd = &cobra.Command{
-	Use:   "download <endpoint>",
+	Use:   "download <endpoint-or-name>",
 	Short: "Download a device agent's uploaded client log (can only be downloaded once)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		out, _ := cmd.Flags().GetString("out")
-		if out == "" {
-			out = strings.ReplaceAll(args[0], ":", "") + ".zip"
-		}
-
 		client, err := newClient()
 		if err != nil {
 			return err
 		}
-		data, err := client.DownloadAgentLog(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+
+		out, _ := cmd.Flags().GetString("out")
+		if out == "" {
+			out = strings.ReplaceAll(endpoint, ":", "") + ".zip"
+		}
+
+		data, err := client.DownloadAgentLog(endpoint)
 		if err != nil {
 			return err
 		}

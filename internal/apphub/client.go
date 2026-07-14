@@ -273,9 +273,33 @@ func (c *Client) ListDevicesByCondition(online *bool, groupName, os, labelName s
 		q.Set("labelName", labelName)
 	}
 
-	var resp devicesByConditionResponse
-	if err := c.do(http.MethodGet, "/api/devicemgr/allDeviceByCondition?"+q.Encode(), nil, &resp); err != nil {
+	var raw json.RawMessage
+	if err := c.do(http.MethodGet, "/api/devicemgr/allDeviceByCondition?"+q.Encode(), nil, &raw); err != nil {
 		return nil, err
+	}
+	return decodeDevicesByCondition(raw)
+}
+
+// decodeDevicesByCondition handles allDeviceByCondition's response, which
+// has been observed as both a plain array (`[Device,...]`) and, per
+// AppHub-v2.3.0.md's documented example, `{"count":<n>,"data":[Device,...]}`.
+func decodeDevicesByCondition(raw json.RawMessage) ([]Device, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return []Device{}, nil
+	}
+
+	if trimmed[0] == '[' {
+		var devices []Device
+		if err := json.Unmarshal(trimmed, &devices); err != nil {
+			return nil, fmt.Errorf("apphub: decode devices: %w", err)
+		}
+		return devices, nil
+	}
+
+	var resp devicesByConditionResponse
+	if err := json.Unmarshal(trimmed, &resp); err != nil {
+		return nil, fmt.Errorf("apphub: decode devices: %w", err)
 	}
 	return resp.Data, nil
 }
@@ -319,12 +343,12 @@ func (c *Client) GetDeviceDetails(deviceID string) (json.RawMessage, error) {
 	q.Set("deviceId", deviceID)
 
 	var resp struct {
-		Details string `json:"details"`
+		Details FlexibleJSON `json:"details"`
 	}
 	if err := c.do(http.MethodGet, "/api/devicemgr/details?"+q.Encode(), nil, &resp); err != nil {
 		return nil, err
 	}
-	if resp.Details == "" {
+	if len(resp.Details) == 0 {
 		return nil, nil
 	}
 	return json.RawMessage(resp.Details), nil
@@ -379,6 +403,79 @@ func (c *Client) ListGroups() ([]DeviceGroup, error) {
 		return nil, err
 	}
 	return groups, nil
+}
+
+// GetDeviceCounts returns the number of online and offline devices.
+func (c *Client) GetDeviceCounts() (*DeviceCounts, error) {
+	var items []nameValueStat
+	if err := c.do(http.MethodGet, "/api/devicemgr/alldevicestatus", nil, &items); err != nil {
+		return nil, err
+	}
+	counts := &DeviceCounts{}
+	for _, it := range items {
+		switch it.Name {
+		case "online":
+			counts.Online = it.Value
+		case "offline":
+			counts.Offline = it.Value
+		}
+	}
+	return counts, nil
+}
+
+// GetOnlineDeviceHealth returns the status breakdown (normal/warning/error)
+// of currently online devices.
+func (c *Client) GetOnlineDeviceHealth() (*OnlineDeviceHealth, error) {
+	var items []nameValueStat
+	if err := c.do(http.MethodGet, "/api/devicemgr/onlinedeviceabnormalstatus", nil, &items); err != nil {
+		return nil, err
+	}
+	health := &OnlineDeviceHealth{}
+	for _, it := range items {
+		switch it.Name {
+		case "normal":
+			health.Normal = it.Value
+		case "warning":
+			health.Warning = it.Value
+		case "error":
+			health.Error = it.Value
+		}
+	}
+	return health, nil
+}
+
+// ListGroupStatuses returns every device group's online/alarm status breakdown.
+func (c *Client) ListGroupStatuses() ([]GroupStatus, error) {
+	var raw []rawGroupStatus
+	if err := c.do(http.MethodGet, "/api/groupmgr/allStatusAndGroup", nil, &raw); err != nil {
+		return nil, err
+	}
+	statuses := make([]GroupStatus, 0, len(raw))
+	for _, r := range raw {
+		statuses = append(statuses, GroupStatus{
+			Name:    r.GName,
+			Type:    r.Type,
+			Total:   r.Total,
+			Online:  r.Online,
+			Warning: r.Warning,
+			Error:   r.Error,
+		})
+	}
+	return statuses, nil
+}
+
+// GetGroupStatus returns one device group's online/alarm status breakdown by name.
+func (c *Client) GetGroupStatus(groupName string) (*GroupStatus, error) {
+	statuses, err := c.ListGroupStatuses()
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range statuses {
+		if s.Name == groupName {
+			return &s, nil
+		}
+	}
+	return nil, fmt.Errorf("apphub: no group found with name %q", groupName)
 }
 
 // GroupsOfDevice returns the device groups that the given device endpoint
@@ -491,6 +588,326 @@ func (c *Client) DeployLinuxPackageToGroup(groupName, taskname, productName, ver
 	return c.do(http.MethodPost, path, body, &sr)
 }
 
+// --- Android APP OTA ---
+
+const (
+	androidAppInfoResourceID = 27310
+	androidAppDeployResource = "40004/0/27308" // install and update share this resource
+	androidAppUninstallResID = 27305
+)
+
+// GetInstalledAndroidApps returns the raw (undocumented double-JSON-encoded)
+// list of apps installed on an Android device: {"code":200,"data":[...]}.
+func (c *Client) GetInstalledAndroidApps(agentID string) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/devicemgr/%s/40004/0/%d", url.PathEscape(agentID), androidAppInfoResourceID)
+	var cr contentResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if cr.Content.Value == "" {
+		return nil, nil
+	}
+	return json.RawMessage(cr.Content.Value), nil
+}
+
+// DeployAndroidApp installs or updates an Android app on a single device.
+// downloadPath is typically "<repo package address>/<repo package filename>".
+func (c *Client) DeployAndroidApp(agentID, taskname, filename, pkgName, versionCode, version, downloadPath string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), androidAppDeployResource)
+	body := deployAndroidAppRequest{
+		Taskname:     taskname,
+		Filename:     filename,
+		PkgName:      pkgName,
+		VersionCode:  versionCode,
+		Version:      version,
+		DownloadPath: downloadPath,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// DeployAndroidAppToGroup installs or updates an Android app on every
+// device in groupName (and/or matching labelName, which may be empty).
+func (c *Client) DeployAndroidAppToGroup(groupName, taskname, filename, pkgName, versionCode, version, downloadPath, labelName string) error {
+	path := "/api/devicemgr/batchdeploy/" + androidAppDeployResource
+	body := deployAndroidAppGroupRequest{
+		GroupName:    groupName,
+		Taskname:     taskname,
+		Filename:     filename,
+		PkgName:      pkgName,
+		VersionCode:  versionCode,
+		Version:      version,
+		DownloadPath: downloadPath,
+		LabelName:    labelName,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// UninstallAndroidApp removes an Android app (by package name) from a
+// single device. Unlike every other OTA action, this is a plain LwM2M
+// write ({"id","value"}), not the {taskname,...} shape.
+func (c *Client) UninstallAndroidApp(agentID, pkgName string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/40004/0/%d", url.PathEscape(agentID), androidAppUninstallResID)
+	body := execActionRequest{ID: androidAppUninstallResID, Value: pkgName}
+	var sr statusResponse
+	return c.do(http.MethodPut, path, body, &sr)
+}
+
+// --- Windows exe OTA ---
+
+const (
+	winExeInstalledResourceID = 27300
+	winExeInstallResource     = "50001/0/27301"
+	winExeUpgradeResource     = "50001/0/27303"
+	winExeUninstallResource   = "50001/0/27302"
+)
+
+// GetInstalledWindowsExePackages returns the raw (undocumented) list of
+// exe packages installed on a Windows device via AppHub.
+func (c *Client) GetInstalledWindowsExePackages(agentID string) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/devicemgr/%s/50001/0/%d", url.PathEscape(agentID), winExeInstalledResourceID)
+	var cr contentResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if cr.Content.Value == "" {
+		return nil, nil
+	}
+	return json.RawMessage(cr.Content.Value), nil
+}
+
+// InstallWindowsExe installs an exe package (built with tool "Inno Setup"
+// or "WiX Toolset") on a single device.
+func (c *Client) InstallWindowsExe(agentID, taskname, projectName, tool, version, downloadPath string) error {
+	return c.deployWindowsExe(agentID, winExeInstallResource, taskname, projectName, tool, version, downloadPath)
+}
+
+// UpgradeWindowsExe upgrades an already-installed exe package on a single device.
+func (c *Client) UpgradeWindowsExe(agentID, taskname, projectName, tool, version, downloadPath string) error {
+	return c.deployWindowsExe(agentID, winExeUpgradeResource, taskname, projectName, tool, version, downloadPath)
+}
+
+func (c *Client) deployWindowsExe(agentID, resource, taskname, projectName, tool, version, downloadPath string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), resource)
+	body := deployWindowsExeRequest{
+		Taskname:     taskname,
+		ProjectName:  projectName,
+		Tool:         tool,
+		Version:      version,
+		DownloadPath: downloadPath,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// InstallWindowsExeToGroup installs an exe package on every device in groupName.
+func (c *Client) InstallWindowsExeToGroup(groupName, taskname, projectName, tool, version, downloadPath string) error {
+	return c.deployWindowsExeToGroup(winExeInstallResource, groupName, taskname, projectName, tool, version, downloadPath)
+}
+
+// UpgradeWindowsExeToGroup upgrades an exe package on every device in groupName.
+func (c *Client) UpgradeWindowsExeToGroup(groupName, taskname, projectName, tool, version, downloadPath string) error {
+	return c.deployWindowsExeToGroup(winExeUpgradeResource, groupName, taskname, projectName, tool, version, downloadPath)
+}
+
+func (c *Client) deployWindowsExeToGroup(resource, groupName, taskname, projectName, tool, version, downloadPath string) error {
+	path := "/api/devicemgr/batchdeploy/" + resource
+	body := deployWindowsExeGroupRequest{
+		GroupName:    groupName,
+		Taskname:     taskname,
+		ProjectName:  projectName,
+		Tool:         tool,
+		Version:      version,
+		DownloadPath: downloadPath,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// UninstallWindowsExe removes an exe package from a single device.
+func (c *Client) UninstallWindowsExe(agentID, taskname, projectName, tool, version string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), winExeUninstallResource)
+	body := struct {
+		Taskname    string `json:"taskname"`
+		ProjectName string `json:"projectname"`
+		Tool        string `json:"tool"`
+		Version     string `json:"version"`
+	}{taskname, projectName, tool, version}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// --- Windows zip OTA ---
+
+const (
+	winZipInstalledResourceID = 28300
+	winZipInstallResource     = "50001/0/28301"
+	winZipUpdateResource      = "50001/0/28303"
+	winZipUninstallResource   = "50001/0/28302"
+)
+
+// GetInstalledWindowsZipPackages returns the raw (undocumented) list of
+// zip/compressed packages installed on a Windows device via AppHub.
+func (c *Client) GetInstalledWindowsZipPackages(agentID string) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/devicemgr/%s/50001/0/%d", url.PathEscape(agentID), winZipInstalledResourceID)
+	var cr contentResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if cr.Content.Value == "" {
+		return nil, nil
+	}
+	return json.RawMessage(cr.Content.Value), nil
+}
+
+// InstallWindowsZip installs a zip/compressed package on a single device.
+// parameter is optional (arguments passed to the extracted package).
+func (c *Client) InstallWindowsZip(agentID, taskname, projectName, version, downloadPath, parameter string) error {
+	return c.deployWindowsZip(agentID, winZipInstallResource, taskname, projectName, version, downloadPath, parameter)
+}
+
+// UpdateWindowsZip updates an already-installed zip/compressed package on a single device.
+func (c *Client) UpdateWindowsZip(agentID, taskname, projectName, version, downloadPath, parameter string) error {
+	return c.deployWindowsZip(agentID, winZipUpdateResource, taskname, projectName, version, downloadPath, parameter)
+}
+
+func (c *Client) deployWindowsZip(agentID, resource, taskname, projectName, version, downloadPath, parameter string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), resource)
+	body := deployWindowsZipRequest{
+		Taskname:     taskname,
+		ProjectName:  projectName,
+		Version:      version,
+		DownloadPath: downloadPath,
+		Parameter:    parameter,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// InstallWindowsZipToGroup installs a zip package on every device in groupName.
+func (c *Client) InstallWindowsZipToGroup(groupName, taskname, projectName, version, downloadPath, parameter, labelName string) error {
+	return c.deployWindowsZipToGroup(winZipInstallResource, groupName, taskname, projectName, version, downloadPath, parameter, labelName)
+}
+
+// UpdateWindowsZipToGroup updates a zip package on every device in groupName.
+func (c *Client) UpdateWindowsZipToGroup(groupName, taskname, projectName, version, downloadPath, parameter, labelName string) error {
+	return c.deployWindowsZipToGroup(winZipUpdateResource, groupName, taskname, projectName, version, downloadPath, parameter, labelName)
+}
+
+func (c *Client) deployWindowsZipToGroup(resource, groupName, taskname, projectName, version, downloadPath, parameter, labelName string) error {
+	path := "/api/devicemgr/batchdeploy/" + resource
+	body := deployWindowsZipGroupRequest{
+		GroupName:    groupName,
+		Taskname:     taskname,
+		ProjectName:  projectName,
+		Version:      version,
+		DownloadPath: downloadPath,
+		Parameter:    parameter,
+		LabelName:    labelName,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// UninstallWindowsZip removes a zip package from a single device.
+func (c *Client) UninstallWindowsZip(agentID, taskname, projectName, version string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), winZipUninstallResource)
+	body := struct {
+		Taskname    string `json:"taskname"`
+		ProjectName string `json:"projectname"`
+		Version     string `json:"version"`
+	}{taskname, projectName, version}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// --- Docker compose OTA ---
+
+const (
+	dockerComposeDeployResource    = "60001/0/27301" // install and update share this resource
+	dockerComposeUninstallResource = "60001/0/27302"
+)
+
+// DeployDockerCompose installs or updates a Docker compose/swarm package
+// on a single device.
+func (c *Client) DeployDockerCompose(agentID, taskname, filename, projectName, version, downloadPath string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), dockerComposeDeployResource)
+	body := deployDockerComposeRequest{
+		Taskname:     taskname,
+		Filename:     filename,
+		ProjectName:  projectName,
+		Version:      version,
+		DownloadPath: downloadPath,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// DeployDockerComposeToGroup installs or updates a Docker compose/swarm
+// package on every device in groupName.
+func (c *Client) DeployDockerComposeToGroup(groupName, taskname, filename, projectName, version, downloadPath, labelName string) error {
+	path := "/api/devicemgr/batchdeploy/" + dockerComposeDeployResource
+	body := deployDockerComposeGroupRequest{
+		GroupName:    groupName,
+		Taskname:     taskname,
+		Filename:     filename,
+		ProjectName:  projectName,
+		Version:      version,
+		DownloadPath: downloadPath,
+		LabelName:    labelName,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// UninstallDockerCompose removes a Docker compose/swarm package from a single device.
+func (c *Client) UninstallDockerCompose(agentID, taskname, projectName, version string) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), dockerComposeUninstallResource)
+	body := struct {
+		Taskname    string `json:"taskname"`
+		ProjectName string `json:"projectname"`
+		Version     string `json:"version"`
+	}{taskname, projectName, version}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// --- generic file deploy ---
+
+const fileDeployResource = "40003/0/27206"
+
+// DeployFile writes a file to savepath on a single device, optionally
+// making it executable (isExec).
+func (c *Client) DeployFile(agentID, taskname, savePath, filename, downloadPath string, isExec bool) error {
+	path := fmt.Sprintf("/api/devicemgr/%s/%s", url.PathEscape(agentID), fileDeployResource)
+	body := deployFileRequest{
+		Taskname:     taskname,
+		SavePath:     savePath,
+		Filename:     filename,
+		DownloadPath: downloadPath,
+		IsExec:       isExec,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
+// DeployFileToGroup writes a file to savepath on every device in groupName.
+func (c *Client) DeployFileToGroup(groupName, taskname, savePath, filename, downloadPath string, isExec bool, labelName string) error {
+	path := "/api/devicemgr/batchdeploy/" + fileDeployResource
+	body := deployFileGroupRequest{
+		GroupName:    groupName,
+		Taskname:     taskname,
+		SavePath:     savePath,
+		Filename:     filename,
+		DownloadPath: downloadPath,
+		IsExec:       isExec,
+		LabelName:    labelName,
+	}
+	var sr statusResponse
+	return c.do(http.MethodPost, path, body, &sr)
+}
+
 // devicecontrol object/resource path used for reboot, shutdown, and (best
 // effort, undocumented in AppHub-v2.3.0.md) volume/backlight control. See
 // DeviceLink's PluginsServlet#put_4_writevalue and the "send command"/
@@ -569,10 +986,60 @@ func (c *Client) getPluginAction(agentID string, actionsJSON string) (string, er
 	return cr.Content.Value, nil
 }
 
+// GetBoardInfo returns a device's board-level monitoring snapshot
+// (CPU/memory/storage/battery/network), normalized into consistent
+// float64 metrics regardless of how the agent encoded them - see
+// BoardInfo. Not documented in AppHub-v2.3.0.md.
+func (c *Client) GetBoardInfo(agentID string) (*BoardInfo, error) {
+	q := url.Values{}
+	q.Set("pluginname", "devicecontrol")
+	q.Set("actions", `{'get_board_info':true}`)
+	path := fmt.Sprintf("/api/plugins/%s/40008/0/27600?%s", url.PathEscape(agentID), q.Encode())
+
+	var cr contentFlexibleResponse
+	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if len(cr.Content.Value) == 0 {
+		return &BoardInfo{NetIO: []BoardNetIOStat{}}, nil
+	}
+
+	var raw rawBoardInfo
+	if err := json.Unmarshal(cr.Content.Value, &raw); err != nil {
+		return nil, fmt.Errorf("apphub: decode board info: %w", err)
+	}
+	return raw.normalize(), nil
+}
+
 // GetThresholds returns the device's current monitoring threshold
 // configuration for CPU/memory/storage/network/battery metrics.
+// GetMonitoredProcesses returns the processes currently selected for
+// application/process monitoring, normalized from the agent's
+// string-typed fields into proper numbers/bools. Not documented in
+// AppHub-v2.3.0.md; see MonitoredProcess for details.
+func (c *Client) GetMonitoredProcesses(agentID string) ([]MonitoredProcess, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_monitor_app':true}`)
+	if err != nil {
+		return nil, err
+	}
+
+	processes := make([]MonitoredProcess, 0)
+	if raw == "" {
+		return processes, nil
+	}
+
+	var rawProcesses []rawMonitoredProcess
+	if err := json.Unmarshal([]byte(raw), &rawProcesses); err != nil {
+		return nil, fmt.Errorf("apphub: decode monitored processes: %w", err)
+	}
+	for _, p := range rawProcesses {
+		processes = append(processes, p.normalize())
+	}
+	return processes, nil
+}
+
 func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
-	raw, err := c.getPluginAction(agentID, `{"get_threshold":true}`)
+	raw, err := c.getPluginAction(agentID, `{'get_threshold':true}`)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +1098,7 @@ func (c *Client) SetMonitorEnabled(agentID string, enabled bool) error {
 // ListProcesses returns the running processes/threads on a Windows or Linux
 // device, including whether each is currently being monitored.
 func (c *Client) ListProcesses(agentID string) ([]ProcessInfo, error) {
-	raw, err := c.getPluginAction(agentID, `{"get_software_info":true}`)
+	raw, err := c.getPluginAction(agentID, `{'get_software_info':true}`)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +1145,7 @@ func (c *Client) SetDockerMonitorEnabled(agentID string, enabled bool) error {
 // GetUSBMonitorEnabled reports whether USB peripheral change monitoring
 // (alerting on USB connect/disconnect) is enabled.
 func (c *Client) GetUSBMonitorEnabled(agentID string) (bool, error) {
-	raw, err := c.getPluginAction(agentID, `{"get_usb_change":true}`)
+	raw, err := c.getPluginAction(agentID, `{'get_usb_change':true}`)
 	if err != nil {
 		return false, err
 	}
@@ -710,7 +1177,7 @@ func (c *Client) GetUSBStorageEnabled(agentID string) (bool, error) {
 	// "get_usb_change" / "get_threshold" / "get_software_info" /
 	// "get_docker_info" strings makes the server fall through to a plain
 	// LwM2M read of resource 27600, which is the USB-storage-enabled flag.
-	q.Set("actions", `{"get_usb_storage_status":true}`)
+	q.Set("actions", `{'get_usb_storage_status':true}`)
 	path := fmt.Sprintf("/api/plugins/%s/40008/0/27600?%s", url.PathEscape(agentID), q.Encode())
 
 	var cr contentBoolResponse

@@ -19,7 +19,7 @@ func parseOnOff(s string) (bool, error) {
 }
 
 var deviceSetMonitorCmd = &cobra.Command{
-	Use:   "set-monitor <endpoint> <on|off>",
+	Use:   "set-monitor <endpoint-or-name> <on|off>",
 	Short: "Enable or disable overall hardware monitoring (CPU/memory/storage/network/battery thresholds)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -31,10 +31,36 @@ var deviceSetMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetMonitorEnabled(args[0], enabled); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetMonitorEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceBoardInfoCmd = &cobra.Command{
+	Use:   "get-monitor <endpoint-or-name>",
+	Short: "Get a device's board-level monitoring detail (best effort, see NOTE in internal/apphub)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		info, err := client.GetBoardInfo(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(info)
 		return nil
 	},
 }
@@ -47,7 +73,7 @@ var deviceThresholdCmd = &cobra.Command{
 }
 
 var deviceThresholdGetCmd = &cobra.Command{
-	Use:   "get <endpoint>",
+	Use:   "get <endpoint-or-name>",
 	Short: "Get the device's current threshold configuration",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -55,7 +81,11 @@ var deviceThresholdGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		settings, err := client.GetThresholds(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		settings, err := client.GetThresholds(endpoint)
 		if err != nil {
 			return err
 		}
@@ -65,7 +95,7 @@ var deviceThresholdGetCmd = &cobra.Command{
 }
 
 var deviceThresholdSetCmd = &cobra.Command{
-	Use:   "set <endpoint> <metric> <on|off>",
+	Use:   "set <endpoint-or-name> <metric> <on|off>",
 	Short: "Enable/disable and configure one threshold metric",
 	Long: `Supported metrics: cpu_temp, cpu_usage, memory_usage, storage_usage,
 battery_available, network_upload_speed, network_download_speed.`,
@@ -89,7 +119,11 @@ battery_available, network_upload_speed, network_download_speed.`,
 		if err != nil {
 			return err
 		}
-		if err := client.SetThreshold(args[0], metric, enabled, warn, errorLevel); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetThreshold(endpoint, metric, enabled, warn, errorLevel); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -105,7 +139,7 @@ var deviceProcessCmd = &cobra.Command{
 }
 
 var deviceProcessListCmd = &cobra.Command{
-	Use:   "list <endpoint>",
+	Use:   "list <endpoint-or-name>",
 	Short: "List running processes/threads and their monitor status",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -113,7 +147,33 @@ var deviceProcessListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		procs, err := client.ListProcesses(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		procs, err := client.ListProcesses(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(procs)
+		return nil
+	},
+}
+
+var deviceProcessMonitoredCmd = &cobra.Command{
+	Use:   "monitored <endpoint-or-name>",
+	Short: "List the processes currently selected for application/process monitoring",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		procs, err := client.GetMonitoredProcesses(endpoint)
 		if err != nil {
 			return err
 		}
@@ -123,7 +183,7 @@ var deviceProcessListCmd = &cobra.Command{
 }
 
 var deviceProcessSetMonitorCmd = &cobra.Command{
-	Use:   "set-monitor <endpoint> <on|off>",
+	Use:   "set-monitor <endpoint-or-name> <on|off>",
 	Short: "Enable or disable application/process monitoring",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -135,7 +195,11 @@ var deviceProcessSetMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetProcessMonitorEnabled(args[0], enabled); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetProcessMonitorEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -151,7 +215,7 @@ var deviceDockerCmd = &cobra.Command{
 }
 
 var deviceDockerInfoCmd = &cobra.Command{
-	Use:   "info <endpoint>",
+	Use:   "info <endpoint-or-name>",
 	Short: "Get the Docker compose/swarm/image groups deployed on a device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -159,7 +223,11 @@ var deviceDockerInfoCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		groups, err := client.GetDockerInfo(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		groups, err := client.GetDockerInfo(endpoint)
 		if err != nil {
 			return err
 		}
@@ -169,7 +237,7 @@ var deviceDockerInfoCmd = &cobra.Command{
 }
 
 var deviceDockerSetMonitorCmd = &cobra.Command{
-	Use:   "set-monitor <endpoint> <on|off>",
+	Use:   "set-monitor <endpoint-or-name> <on|off>",
 	Short: "Enable or disable Docker container monitoring",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -181,7 +249,11 @@ var deviceDockerSetMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetDockerMonitorEnabled(args[0], enabled); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetDockerMonitorEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -197,7 +269,7 @@ var deviceUsbCmd = &cobra.Command{
 }
 
 var deviceUsbGetMonitorCmd = &cobra.Command{
-	Use:   "get-monitor <endpoint>",
+	Use:   "get-monitor <endpoint-or-name>",
 	Short: "Report whether USB peripheral change monitoring is enabled",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -205,7 +277,11 @@ var deviceUsbGetMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		enabled, err := client.GetUSBMonitorEnabled(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		enabled, err := client.GetUSBMonitorEnabled(endpoint)
 		if err != nil {
 			return err
 		}
@@ -215,7 +291,7 @@ var deviceUsbGetMonitorCmd = &cobra.Command{
 }
 
 var deviceUsbSetMonitorCmd = &cobra.Command{
-	Use:   "set-monitor <endpoint> <on|off>",
+	Use:   "set-monitor <endpoint-or-name> <on|off>",
 	Short: "Enable or disable USB peripheral change monitoring",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -227,7 +303,11 @@ var deviceUsbSetMonitorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetUSBMonitorEnabled(args[0], enabled); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetUSBMonitorEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -236,7 +316,7 @@ var deviceUsbSetMonitorCmd = &cobra.Command{
 }
 
 var deviceUsbGetStorageCmd = &cobra.Command{
-	Use:   "get-storage <endpoint>",
+	Use:   "get-storage <endpoint-or-name>",
 	Short: "Report whether USB mass-storage access is enabled",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -244,7 +324,11 @@ var deviceUsbGetStorageCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		enabled, err := client.GetUSBStorageEnabled(args[0])
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		enabled, err := client.GetUSBStorageEnabled(endpoint)
 		if err != nil {
 			return err
 		}
@@ -254,7 +338,7 @@ var deviceUsbGetStorageCmd = &cobra.Command{
 }
 
 var deviceUsbSetStorageCmd = &cobra.Command{
-	Use:   "set-storage <endpoint> <on|off>",
+	Use:   "set-storage <endpoint-or-name> <on|off>",
 	Short: "Enable or disable USB mass-storage access",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -266,7 +350,11 @@ var deviceUsbSetStorageCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SetUSBStorageEnabled(args[0], enabled); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetUSBStorageEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -275,7 +363,7 @@ var deviceUsbSetStorageCmd = &cobra.Command{
 }
 
 var deviceSyncTimeCmd = &cobra.Command{
-	Use:   "sync-time <endpoint>",
+	Use:   "sync-time <endpoint-or-name>",
 	Short: "Trigger an immediate clock sync on a device (best effort, see NOTE in internal/apphub)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -283,7 +371,11 @@ var deviceSyncTimeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := client.SyncTime(args[0]); err != nil {
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SyncTime(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -293,6 +385,7 @@ var deviceSyncTimeCmd = &cobra.Command{
 
 func init() {
 	deviceCmd.AddCommand(deviceSetMonitorCmd)
+	deviceCmd.AddCommand(deviceBoardInfoCmd)
 	deviceCmd.AddCommand(deviceSyncTimeCmd)
 
 	deviceCmd.AddCommand(deviceThresholdCmd)
@@ -303,6 +396,7 @@ func init() {
 
 	deviceCmd.AddCommand(deviceProcessCmd)
 	deviceProcessCmd.AddCommand(deviceProcessListCmd)
+	deviceProcessCmd.AddCommand(deviceProcessMonitoredCmd)
 	deviceProcessCmd.AddCommand(deviceProcessSetMonitorCmd)
 
 	deviceCmd.AddCommand(deviceDockerCmd)

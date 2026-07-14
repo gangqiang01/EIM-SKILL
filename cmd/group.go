@@ -25,6 +25,35 @@ var groupListCmd = &cobra.Command{
 	},
 }
 
+var groupStatusCmd = &cobra.Command{
+	Use:   "status [group-name]",
+	Short: "Get device groups' online/warning/error status breakdown",
+	Long:  `With no group-name, returns every group's breakdown; with one, returns just that group's.`,
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+
+		if len(args) == 1 {
+			status, err := client.GetGroupStatus(args[0])
+			if err != nil {
+				return err
+			}
+			printJSON(status)
+			return nil
+		}
+
+		statuses, err := client.ListGroupStatuses()
+		if err != nil {
+			return err
+		}
+		printJSON(statuses)
+		return nil
+	},
+}
+
 var groupCreateCmd = &cobra.Command{
 	Use:   "create <name> <type> [description]",
 	Short: "Add a new device group",
@@ -61,6 +90,7 @@ var groupCreateCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(groupCmd)
 	groupCmd.AddCommand(groupListCmd)
+	groupCmd.AddCommand(groupStatusCmd)
 	groupCmd.AddCommand(groupCreateCmd)
 
 	groupCreateCmd.Flags().String("creator", "", "username recorded as the group's creator (default: the configured login username)")

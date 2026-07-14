@@ -1,5 +1,4 @@
-base_url: http://172.21.73.146:8080
+base_url: http://172.21.84.172:8080
 username: admin
 password: admin
-repo_base_url: http://172.21.73.146:30001
-ithings_base_url: http://172.21.73.146:8082
+repo_base_url: http://172.21.84.172:30001

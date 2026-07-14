@@ -1,17 +1,18 @@
 // Package repo is an HTTP client for the m2m-management-edge "software
 // repository" server that DeviceLink/AppHub uses to store OTA-able
-// packages. It runs alongside the main AppHub server and, per the
-// DeviceLink web console (assets/js/baseApi.js repoApiGet/repoApiPost),
-// accepts the same accesstoken issued by AppHub's /login endpoint - there
-// is no separate repo-server login.
+// packages (Android APKs, Windows exe/zip installers, Docker compose
+// files, generic files, Linux packages). It runs alongside the main
+// AppHub server and, per the DeviceLink web console
+// (assets/js/baseApi.js repoApiGet), accepts the same accesstoken issued
+// by AppHub's /login endpoint - there is no separate repo-server login.
 package repo
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -59,31 +60,18 @@ type envelope struct {
 	Count  int64           `json:"count"`
 }
 
-// do issues a request against path, optionally JSON-encoding body, and
-// decodes the envelope's data field into out. It retries once after a
-// fresh AppHub login on 401/403.
-func (c *Client) do(method, path string, body interface{}, out interface{}) error {
+// do issues a GET request against path and decodes the envelope's data
+// field into out. It retries once after a fresh AppHub login on 401/403.
+func (c *Client) do(method, path string, out interface{}) error {
 	token, err := c.tokens.Token()
 	if err != nil {
 		return err
 	}
 
 	doOnce := func(tok string) (*http.Response, []byte, error) {
-		var reader io.Reader
-		if body != nil {
-			data, err := json.Marshal(body)
-			if err != nil {
-				return nil, nil, err
-			}
-			reader = bytes.NewReader(data)
-		}
-
-		req, err := http.NewRequest(method, c.baseURL+path, reader)
+		req, err := http.NewRequest(method, c.baseURL+path, nil)
 		if err != nil {
 			return nil, nil, err
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("accesstoken", tok)
 
@@ -148,55 +136,57 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 // repo - i.e. the packages that can be deployed/OTA-updated to a device.
 func (c *Client) ListLinuxPackages() ([]LinuxPackage, error) {
 	var pkgs []LinuxPackage
-	if err := c.do(http.MethodGet, "/repoLinuxPkg", nil, &pkgs); err != nil {
+	if err := c.do(http.MethodGet, "/repoLinuxPkg", &pkgs); err != nil {
 		return nil, err
 	}
 	return pkgs, nil
 }
 
-// ListStorages returns every storage backend configured on the repo server.
-// Note: the server never returns the secret key on this listing endpoint.
-func (c *Client) ListStorages() ([]Storage, error) {
-	var storages []Storage
-	if err := c.do(http.MethodGet, "/storage", nil, &storages); err != nil {
+// ListAndroidApps returns every Android APK available in the repo.
+func (c *Client) ListAndroidApps() ([]AndroidApp, error) {
+	var apps []AndroidApp
+	if err := c.do(http.MethodGet, "/repoapps", &apps); err != nil {
 		return nil, err
 	}
-	return storages, nil
+	return apps, nil
 }
 
-// AddS3CompatibleStorage registers a MinIO/AWS S3/Alibaba OSS storage
-// backend. platform is stored verbatim as the backend's "type" - the server
-// enforces no fixed enum here, so use a consistent convention such as
-// "minio", "s3", or "oss".
-func (c *Client) AddS3CompatibleStorage(platform, endpointURL, bucket, accessKey, secretKey string) error {
-	body := addStorageRequest{
-		Platform:  platform,
-		BlobURL:   endpointURL,
-		Bucket:    bucket,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
+// ListWindowsPackages returns Windows installer packages available in the
+// repo. pkgType filters to "exe" or "zip" (the compressed-package
+// discriminator observed in RepoExe.type); pass "" for both.
+func (c *Client) ListWindowsPackages(pkgType string) ([]WindowsPackage, error) {
+	path := "/repoexe"
+	if pkgType != "" {
+		q := url.Values{}
+		q.Set("type", pkgType)
+		path = "/exeByType?" + q.Encode()
 	}
-	return c.do(http.MethodPost, "/storage", body, nil)
-}
-
-// AddAzureBlobStorage registers an Azure Blob storage backend.
-func (c *Client) AddAzureBlobStorage(container, connectionString string) error {
-	body := addStorageRequest{
-		Platform:         "azure",
-		Container:        container,
-		ConnectionString: connectionString,
+	var pkgs []WindowsPackage
+	if err := c.do(http.MethodGet, path, &pkgs); err != nil {
+		return nil, err
 	}
-	return c.do(http.MethodPost, "/storage", body, nil)
+	return pkgs, nil
 }
 
-// SetActiveStorage re-validates and activates the storage backend
-// identified by sid - it becomes the one used for all subsequent uploads
-// (OTA packages, app icons, etc).
-func (c *Client) SetActiveStorage(sid int64) error {
-	return c.do(http.MethodPost, fmt.Sprintf("/storage/%d", sid), nil, nil)
+// ListDockerComposePackages returns every Docker compose/swarm package
+// available in the repo.
+func (c *Client) ListDockerComposePackages() ([]DockerComposePackage, error) {
+	var pkgs []DockerComposePackage
+	if err := c.do(http.MethodGet, "/repoDockerCompose", &pkgs); err != nil {
+		return nil, err
+	}
+	return pkgs, nil
 }
 
-// DeleteStorage removes a storage backend and every repo object stored in it.
-func (c *Client) DeleteStorage(sid int64) error {
-	return c.do(http.MethodDelete, fmt.Sprintf("/storage/%d", sid), nil, nil)
+// ListFiles returns generic files available in the repo for file-deploy,
+// filtered by fileType (required by the server - there is no "list all"
+// endpoint for this package type).
+func (c *Client) ListFiles(fileType string) ([]GeneralFile, error) {
+	q := url.Values{}
+	q.Set("type", fileType)
+	var files []GeneralFile
+	if err := c.do(http.MethodGet, "/repofiles/bytype?"+q.Encode(), &files); err != nil {
+		return nil, err
+	}
+	return files, nil
 }

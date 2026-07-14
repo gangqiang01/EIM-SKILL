@@ -2,22 +2,19 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/gangqiang01/EIM-SKILL/internal/apphub"
 	"github.com/gangqiang01/EIM-SKILL/internal/config"
-	"github.com/gangqiang01/EIM-SKILL/internal/ithings"
 	"github.com/gangqiang01/EIM-SKILL/internal/repo"
 	"github.com/spf13/cobra"
 )
 
 var (
-	cfgFile        string
-	baseURL        string
-	username       string
-	password       string
-	repoBaseURL    string
-	ithingsBaseURL string
+	cfgFile     string
+	baseURL     string
+	username    string
+	password    string
+	repoBaseURL string
 )
 
 var rootCmd = &cobra.Command{
@@ -25,11 +22,22 @@ var rootCmd = &cobra.Command{
 	Short:   "Command-line skill tools for DeviceLink/AppHub device management",
 	Long:    `eim-skill wraps DeviceLink's device management REST API as a set of command-line tools: listing devices, managing device groups, and controlling individual devices (reboot, shutdown, volume, backlight).`,
 	Version: "0.1.0",
+	// Every command reports its own success/failure via the unified JSON
+	// envelope (see output.go) - suppress cobra's default "Error: ..." +
+	// usage-text printing so stdout always carries exactly one shape.
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
-// Execute runs the root command.
-func Execute() error {
-	return rootCmd.Execute()
+// Execute runs the root command, printing any failure in the unified
+// {"status":500,"msg":"..."} envelope. It returns the process exit code:
+// 0 on success, 1 on failure.
+func Execute() int {
+	if err := rootCmd.Execute(); err != nil {
+		printErrorResult(err)
+		return 1
+	}
+	return 0
 }
 
 func init() {
@@ -38,7 +46,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&username, "username", "", "login username (overrides config file)")
 	rootCmd.PersistentFlags().StringVar(&password, "password", "", "login password (overrides config file)")
 	rootCmd.PersistentFlags().StringVar(&repoBaseURL, "repo-base-url", "", "repo server (m2m-management-edge) base URL (overrides config file, e.g. http://127.0.0.1:30001)")
-	rootCmd.PersistentFlags().StringVar(&ithingsBaseURL, "ithings-base-url", "", "ithings server (sub-device/data-forward) base URL (overrides config file, e.g. http://127.0.0.1:8082)")
 }
 
 // loadConfig loads configuration (file + env + flags, in increasing priority).
@@ -59,9 +66,6 @@ func loadConfig() (*config.Config, error) {
 	}
 	if repoBaseURL != "" {
 		cfg.RepoBaseURL = repoBaseURL
-	}
-	if ithingsBaseURL != "" {
-		cfg.IthingsBaseURL = ithingsBaseURL
 	}
 
 	return cfg, nil
@@ -86,17 +90,25 @@ func newRepoClient(appClient *apphub.Client) (*repo.Client, error) {
 	return repo.NewClient(cfg.RepoBaseURL, appClient), nil
 }
 
-// newIthingsClient loads configuration and returns an ithings server client
-// that authenticates by reusing appClient's AppHub session.
-func newIthingsClient(appClient *apphub.Client) (*ithings.Client, error) {
-	cfg, err := loadConfig()
+// resolveDeviceEndpoint finds the device matching identifier - its
+// endpoint id, or failing that, its device name (devName) - and returns
+// its endpoint id. This lets every device-targeting command accept either
+// form, since the underlying API only operates on endpoint ids.
+func resolveDeviceEndpoint(client *apphub.Client, identifier string) (string, error) {
+	devices, err := client.ListDevices()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return ithings.NewClient(cfg.IthingsBaseURL, appClient), nil
-}
 
-func fatalf(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
+	for _, d := range devices {
+		if d.Endpoint == identifier {
+			return d.Endpoint, nil
+		}
+	}
+	for _, d := range devices {
+		if d.DevName == identifier {
+			return d.Endpoint, nil
+		}
+	}
+	return "", fmt.Errorf("no device found with endpoint or name %q", identifier)
 }
