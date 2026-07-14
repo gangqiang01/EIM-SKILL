@@ -10,7 +10,7 @@ import (
 )
 
 // Config holds the settings needed to reach and authenticate against the
-// DeviceLink/AppHub server and its companion repo server.
+// DeviceOn-EIM server and its companion repo server.
 type Config struct {
 	BaseURL     string `mapstructure:"base_url"`
 	Username    string `mapstructure:"username"`

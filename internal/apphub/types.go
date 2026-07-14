@@ -549,56 +549,31 @@ type dockerInfoResponse struct {
 	Data []DockerGroup `json:"data"`
 }
 
-// SystemLogEntry is one row from the device system log.
-type SystemLogEntry struct {
-	ID       int64  `json:"id"`
-	DeviceID string `json:"deviceId"`
-	DevName  string `json:"devname"`
-	Content  string `json:"content"`
-	OS       string `json:"os"`
-	Level    string `json:"level"`
-	Mode     string `json:"mode"`
-	Name     string `json:"name"`
-	Pid      string `json:"pid"`
-	EventID  string `json:"eventId"`
-	Ts       int64  `json:"ts"`
-}
-
-type deleteByDeviceIDRequest struct {
-	DeviceID string `json:"deviceId"`
-}
-
 type batchIDsRequest struct {
 	IDs []int64 `json:"ids"`
 }
 
 // OperationRecord is one audit-log entry of an admin action (device
-// control, config change, etc).
+// control, config change, etc): who (Username) did what (Event, the raw
+// action payload sent to the device) to what (Target, typically
+// "<endpoint>(<devName>)"), when (Ts, Unix ms). Field names/shapes are
+// confirmed against a live server's actual response, not just
+// OperationRecordServlet.java's assumed shape.
 type OperationRecord struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID       int64  `json:"orid"`
+	Type     string `json:"type"`
 	Event    string `json:"event"`
 	Target   string `json:"target"`
-	CType    string `json:"ctype"`
+	Username string `json:"username"`
 	Ts       int64  `json:"ts"`
 }
 
-// operationRecordsPageResponse mirrors OperationRecordServlet's response:
-// {"count":<n>,"data":"<json-encoded []OperationRecord>"} - data is
-// double-JSON-encoded (a string containing JSON, not a nested array).
+// operationRecordsPageResponse mirrors /api/records/byPage's actual
+// response: {"count":<n>,"data":[...]} - data is a plain JSON array of
+// OperationRecord, not a double-JSON-encoded string as originally assumed.
 type operationRecordsPageResponse struct {
-	Count int64  `json:"count"`
-	Data  string `json:"data"`
-}
-
-// contentBoolResponse is like contentResponse, but for LwM2M reads that
-// return a raw JSON boolean in content.value instead of a JSON-string.
-type contentBoolResponse struct {
-	Status  string `json:"status"`
-	Content struct {
-		ID    int  `json:"id"`
-		Value bool `json:"value"`
-	} `json:"content"`
+	Count int64             `json:"count"`
+	Data  []OperationRecord `json:"data"`
 }
 
 // agentLogRequestValue is the plain (non-devicecontrol) LwM2M write value

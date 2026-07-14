@@ -8,7 +8,9 @@
 *.obj
 *.log
 eim-skill
+eim-skill-arm64
 eim-skill.exe
 out/
+dist/
 
 .gocache-mod/

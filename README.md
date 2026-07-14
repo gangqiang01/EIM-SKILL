@@ -1,8 +1,10 @@
 # EIM-SKILL
 
+[中文文档](README-zh.md)
+
 `eim-skill` is a command-line skill tool that wraps
-[DeviceOn-EIM](../../../MYPROJECT/BACKEND/DeviceLink)'s device management
-REST API (documented in `/opt/AppHub-v2.3.0.md`) so device operations can be
+[DeviceOn-EIM](../../../MYPROJECT/BACKEND/DeviceOn-EIM)'s device management
+REST API (documented in `/opt/DeviceOn-EIM-v2.3.0.md`) so device operations can be
 driven from the command line or invoked as a skill by an agent.
 
 ## Output format
@@ -22,6 +24,13 @@ failure. `data`'s shape depends on the command (a device list, a status
 object, `null`/omitted for actions with nothing to report, etc) and is
 omitted entirely on failure.
 
+Every command's `--help` (and its subcommands' `--help`) includes a
+detailed description, parameter meanings, an example invocation, and
+example output - in both English and Chinese (中文). Run
+`eim-skill <command> --help` (or drill into a subcommand, e.g.
+`eim-skill device set-volume --help`) for specifics beyond this README's
+summary tables.
+
 ## Supported commands
 
 ```
@@ -37,7 +46,7 @@ eim-skill device details <endpoint-or-name>                        # get device 
 eim-skill device delete <endpoint-or-name>                         # delete a device
 eim-skill device add-to-group <endpoint-or-name> <group>           # add a device to a group
 eim-skill device monitor <endpoint-or-name> --type cpu|memory      # get cpu/memory monitoring data
-  [--begin <unix-ms>] [--end <unix-ms>]
+  [--last <30m|12h|3d>]                                            # optionally restrict to a recent time window
 eim-skill device reboot <endpoint-or-name>                         # reboot a device now
 eim-skill device shutdown <endpoint-or-name>                       # shut down a device now
 eim-skill device set-volume <endpoint-or-name> <0-100>             # set audio volume
@@ -61,13 +70,13 @@ Every device object returned by `device list`/`device get` includes
 raw numeric `deviceStatus` (0/1/2) - the same code `device list --alarm`
 filters on, translated so you don't have to know the mapping.
 
-`set-volume` and `set-backlight` are not documented in AppHub-v2.3.0.md;
+`set-volume` and `set-backlight` are not documented in DeviceOn-EIM-v2.3.0.md;
 they are implemented on the same devicecontrol resource as reboot/shutdown,
-inferred from DeviceLink's `PluginsServlet` source. Verify against your
+inferred from DeviceOn-EIM's `PluginsServlet` source. Verify against your
 device firmware before relying on them in production.
 
 `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
-target every device in a group with a single call, using AppHub's documented
+target every device in a group with a single call, using DeviceOn-EIM's documented
 group-batch devicecontrol resource (`PUT
 /api/plugins/batch/{groupname}/40008/0/27601`) rather than looping over each
 device individually. `--label` optionally narrows the target to devices
@@ -80,7 +89,7 @@ network interfaces) rather than the full device record (online status,
 group membership, etc).
 
 `device counts`/`device health`/`group status` are documented in
-AppHub-v2.3.0.md but return a flat `[{"name":...,"value":...}]` array
+DeviceOn-EIM-v2.3.0.md but return a flat `[{"name":...,"value":...}]` array
 (or, for `group status`, `"gname"` instead of `"name"`); this CLI
 normalizes them into a single object with clear field names.
 
@@ -106,9 +115,10 @@ eim-skill device docker set-monitor <endpoint-or-name> <on|off>     # docker mon
 
 eim-skill device usb get-monitor <endpoint-or-name>                 # is USB change monitoring on?
 eim-skill device usb set-monitor <endpoint-or-name> <on|off>        # USB change monitoring on/off
+eim-skill device usb set-storage <endpoint-or-name> <on|off>        # allow/deny USB mass-storage access (unverified)
 ```
 
-This mirrors the DeviceLink web console's "monitorAlert" feature: CPU,
+This mirrors the DeviceOn-EIM web console's "monitorAlert" feature: CPU,
 memory, storage and network are monitored via configurable warn/error
 thresholds (`device threshold`) rather than a live dashboard feed - pair
 this with `device monitor --type cpu|memory` for historical CPU/memory
@@ -116,14 +126,14 @@ samples, or `device get-monitor` for a live snapshot (see below). Process
 and Docker monitoring here cover the on/off toggle only; the web
 console's per-process/per-container selection isn't wired up yet.
 
-`device get-monitor` is not documented in AppHub-v2.3.0.md (found by
+`device get-monitor` is not documented in DeviceOn-EIM-v2.3.0.md (found by
 inspecting real traffic to the `get_board_info` devicecontrol action). Its
 response is normalized: the raw agent payload mixes numbers, numeric
 strings, and `"N/A"` placeholders inconsistently, so this CLI parses it
 into consistent `float64` fields (`null` when unavailable) with
 self-documenting names (`usage_percent`, `total_gb`, etc). Units/semantics
 are inferred from observed values, not a spec - see the `BoardInfo`
-doc comment in `internal/apphub/types.go`.
+doc comment in `internal/DeviceOn-EIM/types.go`.
 
 `device process monitored` is also undocumented (the `get_monitor_app`
 devicecontrol action, found the same way) and normalized similarly -
@@ -132,17 +142,21 @@ devicecontrol action, found the same way) and normalized similarly -
 Its per-item field shape is inferred by analogy with the confirmed
 `device process list` shape (same underlying subsystem) rather than
 verified against a populated list - see the `MonitoredProcess` doc
-comment in `internal/apphub/types.go`.
+comment in `internal/DeviceOn-EIM/types.go`.
+
+`device usb set-storage` is undocumented and unverified: its sibling read
+command (`usb get-storage`) queried a guessed action name and was removed
+after live testing showed the server didn't recognize it (it silently
+returned an empty result instead of a real flag) - this write-side action
+name may be equally wrong. Confirm it actually changes device behavior
+before relying on it in any unattended workflow.
 
 ### Logs and operation records
 
 ```
-eim-skill log system list [--page N] [--limit N] [--device-id <endpoint-or-name>] [--os <os>] [--keywords <kw>] [--begin <unix-ms>] [--end <unix-ms>]
-eim-skill log system delete <id>
-eim-skill log system delete-by-device <endpoint-or-name>
-eim-skill log system batch-delete <id> [id...]
+eim-skill log system set-monitor <endpoint-or-name> <on|off>       # turn system log collection/reporting on or off
 
-eim-skill log operations list [--page N] [--limit N] [--target <substr>] [--begin <unix-ms>] [--end <unix-ms>]
+eim-skill log operations list [--limit N] [--target <substr>] [--last <30m|12h|3d>]
 eim-skill log operations delete <id>
 eim-skill log operations delete-all
 eim-skill log operations batch-delete <id> [id...]
@@ -152,15 +166,41 @@ eim-skill log agent status <action-id>
 eim-skill log agent download <endpoint-or-name> [--out <file>]
 ```
 
+`--last` (on `log operations list` and `device monitor`) takes a relative
+time window instead of raw Unix-millisecond timestamps - e.g. `--last
+30m`, `--last 12h`, `--last 3d` - covering the entries/samples from that
+far back through now; omit it for no time filter. `--limit` (default 20)
+simply caps how many of the most recent entries come back - there's no
+`--page` to think about, since this command always fetches from the start
+of the result set.
+
 `log operations` (an audit log of admin actions) is not documented in
-AppHub-v2.3.0.md - see `OperationRecordServlet.java`. Agent/client log
-retrieval is asynchronous and needs a reachable callback server: the
-AppHub server can't push a file to you directly, so `log agent request`
-asks the device's agent to upload its log to `<callback-url>` (which must
-be an HTTP address the device can reach, running a server that accepts the
-upload - this CLI does not provide one). Poll `log agent status` until it
-reports `"success"`, then `log agent download` (works only once - the
-server deletes the file after serving it).
+DeviceOn-EIM-v2.3.0.md - it was reverse-engineered from
+`OperationRecordServlet.java`, and its field names/shapes (`orid`, `type`,
+`event`, `target`, `username`, `ts`) are confirmed against a live server's
+actual response (`data` is a plain JSON array, not the double-encoded
+string the servlet's naming would suggest).
+
+`log system set-monitor` is likewise undocumented (inferred from a
+captured devicecontrol request using the `set_monitor_data_report`/
+`systemd_log_monitor` action), but confirmed to succeed against a live
+device (its effect is visible afterward in `log operations list`'s audit
+trail). There is currently no command to query the system log entries it
+enables collection of: the documented `/api/systemLog/bypage` endpoint
+returned an HTTP 400 "Invalid path" error from a real server during
+testing (a server-side routing issue, not a request-shape problem - the
+request matched DeviceOn-EIM-v2.3.0.md exactly), so that `list` command
+(and the `delete`/`delete-by-device`/`batch-delete` commands that depended
+on it to discover ids) was removed rather than shipped non-functional.
+
+Agent/client log retrieval is asynchronous and needs a reachable callback
+server: the DeviceOn-EIM server can't push a file to you directly, so
+`log agent request` asks the device's agent to upload its log to
+`<callback-url>` (which must be an HTTP address the device can reach,
+running a server that accepts the upload - this CLI does not provide
+one). Poll `log agent status` until it reports `"success"`, then
+`log agent download` (works only once - the server deletes the file after
+serving it).
 
 ### OTA deployment
 
@@ -169,7 +209,7 @@ server (m2m-management-edge) for packages available to push; `apply`/
 `apply-group` (or `install`/`upgrade` for Windows) look up the requested
 package by name+version in that listing, build its download path, and
 push it to a device or a whole group via the same devicecontrol resource
-the DeviceLink web console uses.
+the DeviceOn-EIM web console uses.
 
 ```
 eim-skill ota linux list                                            # packages available in the repo
@@ -224,12 +264,12 @@ Notes:
   and the full device-resolve → repo-lookup → error-handling pipeline
   (`ota file list --type deploy` returned real repo data matching this
   CLI's struct exactly). The final device-side deploy POST for each type
-  is implemented from AppHub-v2.3.0.md's documented request/response
+  is implemented from DeviceOn-EIM-v2.3.0.md's documented request/response
   shapes but wasn't exercised against a live device in this pass.
 
 ## Configuration
 
-`eim-skill` needs the DeviceLink server's base URL and login credentials,
+`eim-skill` needs the DeviceOn-EIM server's base URL and login credentials,
 plus the repo server's base URL for OTA commands. These are read from, in
 increasing priority order:
 

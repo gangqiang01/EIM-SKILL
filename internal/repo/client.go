@@ -1,5 +1,5 @@
 // Package repo is an HTTP client for the m2m-management-edge "software
-// repository" server that DeviceLink/AppHub uses to store OTA-able
+// repository" server that DeviceOn-EIM uses to store OTA-able
 // packages (Android APKs, Windows exe/zip installers, Docker compose
 // files, generic files, Linux packages). It runs alongside the main
 // AppHub server and, per the DeviceLink web console

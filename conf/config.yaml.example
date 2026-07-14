@@ -1,0 +1,4 @@
+base_url: http://127.0.0.1:30010
+username: admin
+password: admin
+repo_base_url: http://127.0.0.1:30001

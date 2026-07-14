@@ -1,11 +1,11 @@
 ---
 name: device-management
-description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceLink/AppHub, and control individual devices - reboot, shutdown, set volume/backlight, enable/disable USB storage, trigger a time sync, add a device to a group, or delete a device. Use this whenever the user asks to look up, list, group, or remotely control an AppHub-managed device via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、禁用U盘/USB存储、时间同步。
+description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceOn-EIM, and control individual devices - reboot, shutdown, set volume/backlight, enable/disable USB storage, trigger a time sync, add a device to a group, or delete a device. Use this whenever the user asks to look up, list, group, or remotely control an AppHub-managed device via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、禁用U盘/USB存储、时间同步。
 ---
 
 # Device management
 
-Wraps DeviceLink/AppHub's device management REST API as `eim-skill device
+Wraps DeviceOn-EIM's device management REST API as `eim-skill device
 ...` / `eim-skill group ...` commands. Requires `eim-skill` to be built
 (`make` in the repo root) and `conf/config.yaml` (or `--base-url
 --username --password` flags / `EIM_*` env vars) pointing at a reachable
@@ -59,8 +59,7 @@ eim-skill device reboot-group <group-name> [--label <name>]         # reboot eve
 eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
 eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
 eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
-eim-skill device usb get-storage <endpoint-or-name>              # is USB mass storage enabled?
-eim-skill device usb set-storage <endpoint-or-name> <on|off>
+eim-skill device usb set-storage <endpoint-or-name> <on|off>     # unverified, see caveat below
 eim-skill device sync-time <endpoint-or-name>
 ```
 
@@ -83,11 +82,17 @@ every device-targeting command resolves it against the live device list.
   any one of them. "Alarm" means the device's combined status
   (`deviceStatus`) is not 0/normal - it's 1 (error) or 2 (warning) on
   either the software or hardware side.
-- `set-volume`, `set-backlight`, `usb set-storage`, and `sync-time` are not
-  documented in AppHub-v2.3.0.md; they're inferred from DeviceLink's
-  `PluginsServlet` Java source (the same devicecontrol resource used for
-  the documented reboot/shutdown actions). Verify against real device
-  firmware before relying on them in an unattended workflow.
+- `set-volume`, `set-backlight`, and `sync-time` are not documented in
+  AppHub-v2.3.0.md; they're inferred from DeviceLink's `PluginsServlet`
+  Java source (the same devicecontrol resource used for the documented
+  reboot/shutdown actions). Verify against real device firmware before
+  relying on them in an unattended workflow.
+- `usb set-storage` is similarly undocumented and additionally unverified:
+  its sibling read command (`usb get-storage`) was removed after live
+  testing showed the server didn't recognize the guessed action name it
+  queried (it silently returned an empty result instead of a real flag),
+  so this write-side action name may be equally wrong - confirm it
+  actually changes device behavior before relying on it.
 - `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
   target every device in a group in one call (documented in
   AppHub-v2.3.0.md as "PUT send command-向批量设备发送命令",

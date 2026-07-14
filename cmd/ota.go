@@ -17,7 +17,25 @@ var otaCmd = &cobra.Command{
 "apply-group" (or "install"/"upgrade" for Windows) look up the requested
 package by name+version in that listing, build its download path, and
 push it to a device or a whole group via the same devicecontrol resource
-the DeviceLink web console uses.`,
+the DeviceLink web console uses.
+
+每种软件包类型都遵循相同的流程："list" 命令查询软件仓库（
+m2m-management-edge）里有哪些可部署的包，然后 "apply"/"apply-group"
+（Windows 是 "install"/"upgrade"）根据你指定的包名+版本号，在那份
+列表里找到对应的包、拼出下载地址，再通过 DeviceLink 控制台使用的同一个
+设备控制接口推送给单台设备或整个设备组。
+
+Package types 软件包类型:
+  linux         Linux deb/tar 软件包
+  android       Android APK 应用
+  windows-exe   Windows exe 安装包（Inno Setup / WiX Toolset）
+  windows-zip   Windows zip/压缩包
+  docker        Docker compose/swarm 编排包
+  file          通用文件（不区分类型的任意文件）
+
+--name/--version must exactly match an entry from that type's "list"
+command, name/version 必须和对应 "list" 命令返回结果里的名称/版本号
+完全一致才能找到并部署。`,
 }
 
 func init() {
@@ -39,6 +57,14 @@ func otaTaskname() string {
 var otaLinuxCmd = &cobra.Command{
 	Use:   "linux",
 	Short: "OTA-deploy Linux packages (deb/tar)",
+	Long: `OTA-deploy Linux packages (deb/tar) - install/update has a single shared
+device-side resource (the server distinguishes install vs. update by
+whether the package is already present), so "apply"/"apply-group" cover
+both cases.
+
+部署 Linux 软件包（deb/tar 格式）——安装和更新在设备端共用同一个接口
+（服务器会根据包是否已安装来判断是全新安装还是更新），所以
+"apply"/"apply-group" 同时覆盖这两种场景。`,
 }
 
 func init() {
@@ -46,13 +72,24 @@ func init() {
 	otaLinuxCmd.AddCommand(otaLinuxInstalledCmd)
 	otaLinuxCmd.AddCommand(otaLinuxApplyCmd)
 	otaLinuxCmd.AddCommand(otaLinuxApplyGroupCmd)
-	otaLinuxApplyGroupCmd.Flags().String("label", "", "only target devices with this label")
+	otaLinuxApplyGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
 }
 
 var otaLinuxListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List Linux packages available in the repo server",
-	Args:  cobra.NoArgs,
+	Long: `List Linux packages available in the repo server (m2m-management-edge) -
+these are the name/version pairs you can pass to "apply"/"apply-group".
+
+列出软件仓库（m2m-management-edge）里可部署的 Linux 软件包——这里的
+名称/版本号就是你之后调用 "apply"/"apply-group" 时要填的值。
+
+Example 示例: eim-skill ota linux list
+
+Example output 输出示例 (empty when the repo has no Linux packages
+uploaded yet 仓库尚未上传任何 Linux 包时返回空数组):
+  {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -74,7 +111,24 @@ var otaLinuxListCmd = &cobra.Command{
 var otaLinuxInstalledCmd = &cobra.Command{
 	Use:   "installed <endpoint-or-name>",
 	Short: "List Linux packages installed on a device",
-	Args:  cobra.ExactArgs(1),
+	Long: `List Linux packages currently installed on a device, with their status.
+
+列出设备上当前已安装的 Linux 软件包及其状态。
+
+Example 示例: eim-skill ota linux installed "146打包机"
+
+Example output 输出示例 (real 真实返回):
+  {
+    "status": 200, "msg": "",
+    "data": [
+      {
+        "appname": "AppHub-Edge", "pkgname": "AppHub-Edge_3.0.5.tar.gz",
+        "pkgtype": "compressed", "version": "3.0.5", "status": "created",
+        "updatetime": "2024-08-01 11:37:23"
+      }
+    ]
+  }`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -113,7 +167,16 @@ func findLinuxPackage(pkgs []repo.LinuxPackage, productName, version string) (*r
 var otaLinuxApplyCmd = &cobra.Command{
 	Use:   "apply <endpoint-or-name> <product-name> <version>",
 	Short: "Install or update a Linux package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update a Linux package on a single device. product-name and
+version must exactly match an entry from "ota linux list".
+
+在单台设备上安装/更新 Linux 软件包。product-name 和 version 必须和
+"ota linux list" 返回结果里的名称/版本号完全一致。
+
+Example 示例: eim-skill ota linux apply "146打包机" AppHub-Edge 3.0.5
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../AppHub-Edge_3.0.5.tar.gz"}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -148,7 +211,17 @@ var otaLinuxApplyCmd = &cobra.Command{
 var otaLinuxApplyGroupCmd = &cobra.Command{
 	Use:   "apply-group <group-name> <product-name> <version>",
 	Short: "Install or update a Linux package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update a Linux package on every device in group-name in a
+single call. --label optionally narrows the target to devices in the
+group that also carry that label.
+
+一次性在整个设备组下的所有设备上安装/更新 Linux 软件包。--label 可选，
+用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota linux apply-group default AppHub-Edge 3.0.5
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../AppHub-Edge_3.0.5.tar.gz"}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -182,6 +255,11 @@ var otaLinuxApplyGroupCmd = &cobra.Command{
 var otaAndroidCmd = &cobra.Command{
 	Use:   "android",
 	Short: "OTA-deploy Android APKs",
+	Long: `OTA-deploy Android APKs. Like Linux, install/update share one device-side
+resource ("apply"/"apply-group" cover both); uninstall is separate.
+
+部署 Android APK 应用。和 Linux 类似，安装和更新共用同一个接口
+（"apply"/"apply-group" 同时覆盖两种场景）；卸载是单独的命令。`,
 }
 
 func init() {
@@ -190,13 +268,23 @@ func init() {
 	otaAndroidCmd.AddCommand(otaAndroidApplyCmd)
 	otaAndroidCmd.AddCommand(otaAndroidApplyGroupCmd)
 	otaAndroidCmd.AddCommand(otaAndroidUninstallCmd)
-	otaAndroidApplyGroupCmd.Flags().String("label", "", "only target devices with this label")
+	otaAndroidApplyGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
 }
 
 var otaAndroidListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List Android APKs available in the repo server",
-	Args:  cobra.NoArgs,
+	Long: `List Android APKs available in the repo server - the name/version pairs
+you can pass to "apply"/"apply-group"/"uninstall".
+
+列出软件仓库里可部署的 Android APK——这里的名称/版本号就是之后调用
+"apply"/"apply-group"/"uninstall" 时要填的值。
+
+Example 示例: eim-skill ota android list
+
+Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
+APK 时返回空数组): {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -218,7 +306,12 @@ var otaAndroidListCmd = &cobra.Command{
 var otaAndroidInstalledCmd = &cobra.Command{
 	Use:   "installed <endpoint-or-name>",
 	Short: "List apps installed on an Android device",
-	Args:  cobra.ExactArgs(1),
+	Long: `List apps currently installed on an Android device.
+
+列出 Android 设备上当前已安装的应用。
+
+Example 示例: eim-skill ota android installed "<android-device>"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -257,7 +350,16 @@ func findAndroidApp(apps []repo.AndroidApp, pkgName, version string) (*repo.Andr
 var otaAndroidApplyCmd = &cobra.Command{
 	Use:   "apply <endpoint-or-name> <pkg-name> <version>",
 	Short: "Install or update an Android app on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update an Android app on a single device. pkg-name is the
+Android package name (e.g. "com.example.app"); version must exactly match
+an entry from "ota android list".
+
+在单台 Android 设备上安装/更新应用。pkg-name 是 Android 包名（如
+"com.example.app"）；version 必须和 "ota android list" 返回结果里的
+版本号完全一致。
+
+Example 示例: eim-skill ota android apply "<android-device>" com.example.app 1.2.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -292,7 +394,15 @@ var otaAndroidApplyCmd = &cobra.Command{
 var otaAndroidApplyGroupCmd = &cobra.Command{
 	Use:   "apply-group <group-name> <pkg-name> <version>",
 	Short: "Install or update an Android app on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update an Android app on every device in group-name in a
+single call. --label optionally narrows the target to devices in the
+group that also carry that label.
+
+一次性在整个设备组下的所有 Android 设备上安装/更新应用。--label 可选，
+用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota android apply-group default com.example.app 1.2.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -324,7 +434,14 @@ var otaAndroidApplyGroupCmd = &cobra.Command{
 var otaAndroidUninstallCmd = &cobra.Command{
 	Use:   "uninstall <endpoint-or-name> <pkg-name>",
 	Short: "Uninstall an Android app from a single device",
-	Args:  cobra.ExactArgs(2),
+	Long: `Uninstall an Android app from a single device by its package name.
+
+按包名从单台 Android 设备上卸载应用。
+
+Example 示例: eim-skill ota android uninstall "<android-device>" com.example.app
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -347,6 +464,14 @@ var otaAndroidUninstallCmd = &cobra.Command{
 var otaWindowsExeCmd = &cobra.Command{
 	Use:   "windows-exe",
 	Short: "OTA-deploy Windows exe installers (Inno Setup / WiX Toolset)",
+	Long: `OTA-deploy Windows exe installers. Unlike Linux/Android/Docker, Windows
+has genuinely separate install vs. upgrade device-side resources, so they
+are exposed as distinct "install"/"upgrade" commands instead of one
+collapsed "apply".
+
+部署 Windows exe 安装包。和 Linux/Android/Docker 不同，Windows 的
+安装与升级在设备端是两个真正独立的接口，所以这里分成 "install" 和
+"upgrade" 两个命令，而不是合并成一个 "apply"。`,
 }
 
 func init() {
@@ -357,12 +482,24 @@ func init() {
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUpgradeCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUpgradeGroupCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUninstallCmd)
+	otaWindowsExeUninstallCmd.Flags().String("tool", "", `packaging tool used to build the installer: "Inno Setup" or "WiX Toolset" (required) - 打包该安装包所用的工具（必填）`)
+	_ = otaWindowsExeUninstallCmd.MarkFlagRequired("tool")
 }
 
 var otaWindowsExeListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List Windows exe installers available in the repo server",
-	Args:  cobra.NoArgs,
+	Long: `List Windows exe installers available in the repo server - the
+name/version pairs you can pass to "install"/"upgrade".
+
+列出软件仓库里可部署的 Windows exe 安装包——这里的名称/版本号就是
+之后调用 "install"/"upgrade" 时要填的值。
+
+Example 示例: eim-skill ota windows-exe list
+
+Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
+exe 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -384,7 +521,12 @@ var otaWindowsExeListCmd = &cobra.Command{
 var otaWindowsExeInstalledCmd = &cobra.Command{
 	Use:   "installed <endpoint-or-name>",
 	Short: "List exe packages installed on a device",
-	Args:  cobra.ExactArgs(1),
+	Long: `List exe packages currently installed on a Windows device.
+
+列出 Windows 设备上当前已安装的 exe 软件包。
+
+Example 示例: eim-skill ota windows-exe installed "<windows-device>"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -423,7 +565,18 @@ func findWindowsPackage(pkgs []repo.WindowsPackage, projectName, version string)
 var otaWindowsExeInstallCmd = &cobra.Command{
 	Use:   "install <endpoint-or-name> <project-name> <version>",
 	Short: "Install an exe package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install an exe package on a single device. project-name and version must
+exactly match an entry from "ota windows-exe list"; the packaging tool
+(Inno Setup/WiX Toolset) is read from that repo entry automatically.
+
+在单台 Windows 设备上安装 exe 软件包。project-name 和 version 必须和
+"ota windows-exe list" 返回结果里的名称/版本号完全一致；打包工具
+（Inno Setup/WiX Toolset）会自动从仓库信息里读取，无需手动指定。
+
+Example 示例: eim-skill ota windows-exe install "<windows-device>" MyApp 1.0.0
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../MyApp-1.0.0.exe", "tool": "Inno Setup"}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeSingle(args[0], args[1], args[2], false)
 	},
@@ -432,7 +585,14 @@ var otaWindowsExeInstallCmd = &cobra.Command{
 var otaWindowsExeUpgradeCmd = &cobra.Command{
 	Use:   "upgrade <endpoint-or-name> <project-name> <version>",
 	Short: "Upgrade an already-installed exe package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Upgrade an already-installed exe package on a single device to
+project-name/version (must exist in "ota windows-exe list").
+
+把单台 Windows 设备上已安装的 exe 软件包升级到指定的 project-name/
+version（必须存在于 "ota windows-exe list" 返回结果里）。
+
+Example 示例: eim-skill ota windows-exe upgrade "<windows-device>" MyApp 1.1.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeSingle(args[0], args[1], args[2], true)
 	},
@@ -466,7 +626,12 @@ func applyWindowsExeSingle(endpointOrName, projectName, version string, upgrade 
 var otaWindowsExeInstallGroupCmd = &cobra.Command{
 	Use:   "install-group <group-name> <project-name> <version>",
 	Short: "Install an exe package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install an exe package on every device in group-name in a single call.
+
+一次性在整个设备组下的所有 Windows 设备上安装 exe 软件包。
+
+Example 示例: eim-skill ota windows-exe install-group win-group MyApp 1.0.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeGroup(args[0], args[1], args[2], false)
 	},
@@ -475,7 +640,14 @@ var otaWindowsExeInstallGroupCmd = &cobra.Command{
 var otaWindowsExeUpgradeGroupCmd = &cobra.Command{
 	Use:   "upgrade-group <group-name> <project-name> <version>",
 	Short: "Upgrade an exe package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Upgrade an already-installed exe package on every device in group-name in
+a single call.
+
+一次性把整个设备组下所有 Windows 设备已安装的 exe 软件包升级到指定
+版本。
+
+Example 示例: eim-skill ota windows-exe upgrade-group win-group MyApp 1.1.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeGroup(args[0], args[1], args[2], true)
 	},
@@ -523,7 +695,19 @@ func lookupWindowsExe(client *apphub.Client, projectName, version string) (*repo
 var otaWindowsExeUninstallCmd = &cobra.Command{
 	Use:   "uninstall <endpoint-or-name> <project-name> <version> --tool <tool>",
 	Short: "Uninstall an exe package from a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Uninstall an exe package from a single device. Unlike install/upgrade
+(which read the packaging tool from the repo listing automatically),
+uninstall requires you to pass --tool explicitly ("Inno Setup" or "WiX
+Toolset", matching how the package was originally installed).
+
+从单台设备上卸载 exe 软件包。和 install/upgrade（会自动从仓库信息里
+读取打包工具）不同，卸载需要你显式传入 --tool（"Inno Setup" 或
+"WiX Toolset"，必须和当初安装时使用的工具一致）。
+
+Example 示例: eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0.0 --tool "Inno Setup"
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tool, _ := cmd.Flags().GetString("tool")
 		client, err := newClient()
@@ -548,6 +732,11 @@ var otaWindowsExeUninstallCmd = &cobra.Command{
 var otaWindowsZipCmd = &cobra.Command{
 	Use:   "windows-zip",
 	Short: "OTA-deploy Windows zip/compressed packages",
+	Long: `OTA-deploy Windows zip/compressed packages (extracted and optionally run
+with --parameter arguments, unlike the installer-driven windows-exe type).
+
+部署 Windows zip/压缩包类型的软件包（解压后可选通过 --parameter 传参
+运行，和走安装程序流程的 windows-exe 类型不同）。`,
 }
 
 func init() {
@@ -560,16 +749,26 @@ func init() {
 	otaWindowsZipCmd.AddCommand(otaWindowsZipUninstallCmd)
 
 	for _, c := range []*cobra.Command{otaWindowsZipInstallCmd, otaWindowsZipInstallGroupCmd, otaWindowsZipUpdateCmd, otaWindowsZipUpdateGroupCmd} {
-		c.Flags().String("parameter", "", "optional arguments passed to the extracted package")
+		c.Flags().String("parameter", "", "optional arguments passed to the extracted package (传给解压后程序的可选启动参数)")
 	}
-	otaWindowsZipInstallGroupCmd.Flags().String("label", "", "only target devices with this label")
-	otaWindowsZipUpdateGroupCmd.Flags().String("label", "", "only target devices with this label")
+	otaWindowsZipInstallGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
+	otaWindowsZipUpdateGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
 }
 
 var otaWindowsZipListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List Windows zip packages available in the repo server",
-	Args:  cobra.NoArgs,
+	Long: `List Windows zip packages available in the repo server - the
+name/version pairs you can pass to "install"/"update".
+
+列出软件仓库里可部署的 Windows zip 软件包——这里的名称/版本号就是
+之后调用 "install"/"update" 时要填的值。
+
+Example 示例: eim-skill ota windows-zip list
+
+Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
+zip 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -591,7 +790,12 @@ var otaWindowsZipListCmd = &cobra.Command{
 var otaWindowsZipInstalledCmd = &cobra.Command{
 	Use:   "installed <endpoint-or-name>",
 	Short: "List zip packages installed on a device",
-	Args:  cobra.ExactArgs(1),
+	Long: `List zip packages currently installed on a Windows device.
+
+列出 Windows 设备上当前已安装的 zip 软件包。
+
+Example 示例: eim-skill ota windows-zip installed "<windows-device>"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -613,7 +817,16 @@ var otaWindowsZipInstalledCmd = &cobra.Command{
 var otaWindowsZipInstallCmd = &cobra.Command{
 	Use:   "install <endpoint-or-name> <project-name> <version>",
 	Short: "Install a zip package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install a zip package on a single device. project-name and version must
+exactly match an entry from "ota windows-zip list". --parameter is
+optional (arguments passed to the extracted package once run).
+
+在单台 Windows 设备上安装 zip 软件包。project-name 和 version 必须和
+"ota windows-zip list" 返回结果里的名称/版本号完全一致。--parameter
+可选，是解压后运行程序时传入的参数。
+
+Example 示例: eim-skill ota windows-zip install "<windows-device>" MyTool 2.0.0 --parameter "--silent"`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		return applyWindowsZipSingle(args[0], args[1], args[2], parameter, false)
@@ -623,7 +836,14 @@ var otaWindowsZipInstallCmd = &cobra.Command{
 var otaWindowsZipUpdateCmd = &cobra.Command{
 	Use:   "update <endpoint-or-name> <project-name> <version>",
 	Short: "Update an already-installed zip package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Update an already-installed zip package on a single device to
+project-name/version (must exist in "ota windows-zip list").
+
+把单台 Windows 设备上已安装的 zip 软件包更新到指定的 project-name/
+version（必须存在于 "ota windows-zip list" 返回结果里）。
+
+Example 示例: eim-skill ota windows-zip update "<windows-device>" MyTool 2.1.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		return applyWindowsZipSingle(args[0], args[1], args[2], parameter, true)
@@ -668,7 +888,15 @@ func applyWindowsZipSingle(endpointOrName, projectName, version, parameter strin
 var otaWindowsZipInstallGroupCmd = &cobra.Command{
 	Use:   "install-group <group-name> <project-name> <version>",
 	Short: "Install a zip package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install a zip package on every device in group-name in a single call.
+--label optionally narrows the target to devices in the group that also
+carry that label.
+
+一次性在整个设备组下的所有 Windows 设备上安装 zip 软件包。--label
+可选，用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota windows-zip install-group win-group MyTool 2.0.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		label, _ := cmd.Flags().GetString("label")
@@ -679,7 +907,15 @@ var otaWindowsZipInstallGroupCmd = &cobra.Command{
 var otaWindowsZipUpdateGroupCmd = &cobra.Command{
 	Use:   "update-group <group-name> <project-name> <version>",
 	Short: "Update a zip package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Update an already-installed zip package on every device in group-name in
+a single call. --label optionally narrows the target to devices in the
+group that also carry that label.
+
+一次性把整个设备组下所有 Windows 设备已安装的 zip 软件包更新到指定
+版本。--label 可选，用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota windows-zip update-group win-group MyTool 2.1.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		label, _ := cmd.Flags().GetString("label")
@@ -721,7 +957,14 @@ func applyWindowsZipGroup(groupName, projectName, version, parameter, label stri
 var otaWindowsZipUninstallCmd = &cobra.Command{
 	Use:   "uninstall <endpoint-or-name> <project-name> <version>",
 	Short: "Uninstall a zip package from a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Uninstall a zip package from a single device.
+
+从单台设备上卸载 zip 软件包。
+
+Example 示例: eim-skill ota windows-zip uninstall "<windows-device>" MyTool 2.0.0
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -745,6 +988,17 @@ var otaWindowsZipUninstallCmd = &cobra.Command{
 var otaDockerCmd = &cobra.Command{
 	Use:   "docker",
 	Short: "OTA-deploy Docker compose/swarm packages",
+	Long: `OTA-deploy Docker compose/swarm packages. Like Linux/Android, install and
+update share one device-side resource, so "apply"/"apply-group" cover
+both.
+
+部署 Docker compose/swarm 编排包。和 Linux/Android 类似，安装和更新
+共用同一个接口，所以 "apply"/"apply-group" 同时覆盖两种场景。To see
+what's already deployed/running on a device, use "device docker info"
+(query-only, part of the device-monitoring feature set) rather than a
+command in this group. 想查看设备上已部署/运行的容器，请用
+"device docker info"（属于设备监控功能，只读查询），而不是这个命令组
+下的命令。`,
 }
 
 func init() {
@@ -752,13 +1006,23 @@ func init() {
 	otaDockerCmd.AddCommand(otaDockerApplyCmd)
 	otaDockerCmd.AddCommand(otaDockerApplyGroupCmd)
 	otaDockerCmd.AddCommand(otaDockerUninstallCmd)
-	otaDockerApplyGroupCmd.Flags().String("label", "", "only target devices with this label")
+	otaDockerApplyGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
 }
 
 var otaDockerListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List Docker compose/swarm packages available in the repo server",
-	Args:  cobra.NoArgs,
+	Long: `List Docker compose/swarm packages available in the repo server - the
+tag/version pairs you can pass to "apply"/"apply-group"/"uninstall".
+
+列出软件仓库里可部署的 Docker compose/swarm 编排包——这里的
+tag/版本号就是之后调用 "apply"/"apply-group"/"uninstall" 时要填的值。
+
+Example 示例: eim-skill ota docker list
+
+Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
+Docker 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -797,7 +1061,14 @@ func findDockerPackage(pkgs []repo.DockerComposePackage, tag, version string) (*
 var otaDockerApplyCmd = &cobra.Command{
 	Use:   "apply <endpoint-or-name> <tag> <version>",
 	Short: "Install or update a Docker compose/swarm package on a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update a Docker compose/swarm package on a single device. tag
+and version must exactly match an entry from "ota docker list".
+
+在单台设备上安装/更新 Docker compose/swarm 编排包。tag 和 version
+必须和 "ota docker list" 返回结果里的值完全一致。
+
+Example 示例: eim-skill ota docker apply "146打包机" myapp-stack 1.0.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -832,7 +1103,15 @@ var otaDockerApplyCmd = &cobra.Command{
 var otaDockerApplyGroupCmd = &cobra.Command{
 	Use:   "apply-group <group-name> <tag> <version>",
 	Short: "Install or update a Docker compose/swarm package on every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Install or update a Docker compose/swarm package on every device in
+group-name in a single call. --label optionally narrows the target to
+devices in the group that also carry that label.
+
+一次性在整个设备组下的所有设备上安装/更新 Docker compose/swarm
+编排包。--label 可选，用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota docker apply-group default myapp-stack 1.0.0`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -864,7 +1143,14 @@ var otaDockerApplyGroupCmd = &cobra.Command{
 var otaDockerUninstallCmd = &cobra.Command{
 	Use:   "uninstall <endpoint-or-name> <tag> <version>",
 	Short: "Uninstall a Docker compose/swarm package from a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Uninstall a Docker compose/swarm package from a single device.
+
+从单台设备上卸载 Docker compose/swarm 编排包。
+
+Example 示例: eim-skill ota docker uninstall "146打包机" myapp-stack 1.0.0
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -888,6 +1174,16 @@ var otaDockerUninstallCmd = &cobra.Command{
 var otaFileCmd = &cobra.Command{
 	Use:   "file",
 	Short: "Deploy generic files to devices",
+	Long: `Deploy generic files (of any kind, not just recognized package formats)
+to devices - no install/uninstall concept, just "push this file to this
+path". --type is required on every command in this group and must match
+whatever category the file was uploaded under in the repo server; there is
+no unconditional "list every file regardless of type" endpoint.
+
+把任意文件（不局限于已识别的软件包格式）推送到设备——没有"安装/卸载"
+的概念，就是"把这个文件放到这个路径"。这个命令组下每个命令都必须传
+--type，且必须和文件当初上传到仓库时所属的分类一致；没有"不区分类型
+列出所有文件"的接口。`,
 }
 
 func init() {
@@ -895,21 +1191,31 @@ func init() {
 	otaFileCmd.AddCommand(otaFileDeployCmd)
 	otaFileCmd.AddCommand(otaFileDeployGroupCmd)
 
-	otaFileListCmd.Flags().String("type", "", "repo file category/type (required)")
+	otaFileListCmd.Flags().String("type", "", "repo file category/type (required) - 仓库里文件的分类/类型（必填）")
 	_ = otaFileListCmd.MarkFlagRequired("type")
 
 	for _, c := range []*cobra.Command{otaFileDeployCmd, otaFileDeployGroupCmd} {
-		c.Flags().String("type", "", "repo file category/type (required, matches how the file was uploaded)")
-		c.Flags().Bool("exec", false, "make the deployed file executable and run it")
+		c.Flags().String("type", "", "repo file category/type (required, matches how the file was uploaded) - 仓库里文件的分类/类型（必填，需和上传时一致）")
+		c.Flags().Bool("exec", false, "make the deployed file executable and run it (部署后赋予可执行权限并运行)")
 		_ = c.MarkFlagRequired("type")
 	}
-	otaFileDeployGroupCmd.Flags().String("label", "", "only target devices with this label")
+	otaFileDeployGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
 }
 
 var otaFileListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List files available in the repo server for a given --type",
-	Args:  cobra.NoArgs,
+	Long: `List files available in the repo server under the given --type category -
+the file names you can pass to "deploy"/"deploy-group".
+
+按 --type 指定的分类，列出软件仓库里可部署的文件——这里的文件名
+就是之后调用 "deploy"/"deploy-group" 时要填的值。
+
+Example 示例: eim-skill ota file list --type deploy
+
+Example output 输出示例 (empty when nothing uploaded under that type
+该分类下尚未上传任何文件时返回空数组): {"status": 200, "msg": "", "data": []}`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		client, err := newClient()
@@ -941,7 +1247,19 @@ func findRepoFile(files []repo.GeneralFile, filename string) (*repo.GeneralFile,
 var otaFileDeployCmd = &cobra.Command{
 	Use:   "deploy <endpoint-or-name> <file-name> <save-path>",
 	Short: "Deploy a file to a single device",
-	Args:  cobra.ExactArgs(3),
+	Long: `Deploy a file to a single device. file-name must exactly match an entry
+from "ota file list --type <type>" (same --type required here); save-path
+is where on the device's filesystem to write it. --exec additionally makes
+it executable and runs it after deployment.
+
+把文件部署到单台设备。file-name 必须和 "ota file list --type <type>"
+返回结果里的文件名完全一致（这里同样需要传相同的 --type）；save-path
+是文件在设备上的保存路径。--exec 会额外赋予可执行权限并在部署后运行它。
+
+Example 示例: eim-skill ota file deploy "146打包机" report.pdf /home/user/report.pdf --type deploy
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../report.pdf"}}`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		isExec, _ := cmd.Flags().GetBool("exec")
@@ -979,7 +1297,15 @@ var otaFileDeployCmd = &cobra.Command{
 var otaFileDeployGroupCmd = &cobra.Command{
 	Use:   "deploy-group <group-name> <file-name> <save-path>",
 	Short: "Deploy a file to every device in a group",
-	Args:  cobra.ExactArgs(3),
+	Long: `Deploy a file to every device in group-name in a single call. Same
+--type/--exec semantics as "deploy". --label optionally narrows the target
+to devices in the group that also carry that label.
+
+一次性把文件部署到整个设备组下的所有设备。--type/--exec 语义和
+"deploy" 相同。--label 可选，用来只对组内带有该标签的设备生效。
+
+Example 示例: eim-skill ota file deploy-group default report.pdf /home/user/report.pdf --type deploy`,
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		isExec, _ := cmd.Flags().GetBool("exec")

@@ -1,4 +1,4 @@
-// Package apphub is an HTTP client for the DeviceLink/AppHub device
+// Package apphub is an HTTP client for the DeviceOn-EIM device
 // management REST API (see /opt/AppHub-v2.3.0.md), used to back the
 // EIM-SKILL command-line tools.
 package apphub
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Client talks to a DeviceLink/AppHub server over HTTP.
+// Client talks to a DeviceOn-EIM server over HTTP.
 type Client struct {
 	baseURL    string
 	username   string
@@ -1218,29 +1218,21 @@ func (c *Client) SetUSBMonitorEnabled(agentID string, enabled bool) error {
 	})
 }
 
-// GetUSBStorageEnabled reports whether USB mass-storage access is
-// currently enabled on the device (distinct from GetUSBMonitorEnabled,
-// which is about change-alerting, not the storage toggle itself).
-func (c *Client) GetUSBStorageEnabled(agentID string) (bool, error) {
-	q := url.Values{}
-	q.Set("pluginname", "devicecontrol")
-	// Any actions value other than the special-cased "get_usb_status" /
-	// "get_usb_change" / "get_threshold" / "get_software_info" /
-	// "get_docker_info" strings makes the server fall through to a plain
-	// LwM2M read of resource 27600, which is the USB-storage-enabled flag.
-	q.Set("actions", `{'get_usb_storage_status':true}`)
-	path := fmt.Sprintf("/api/plugins/%s/40008/0/27600?%s", url.PathEscape(agentID), q.Encode())
-
-	var cr contentBoolResponse
-	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
-		return false, err
-	}
-	return cr.Content.Value, nil
-}
-
 // SetUSBStorageEnabled enables or disables USB mass-storage access on the device.
 func (c *Client) SetUSBStorageEnabled(agentID string, enabled bool) error {
 	return c.execAction(agentID, map[string]interface{}{"usb_storage_status": enabled})
+}
+
+// SetSystemLogMonitorEnabled turns systemd log collection/reporting on or
+// off for a device. This feeds ListSystemLogs's data - without it, system
+// log queries for that device may return nothing.
+//
+// NOTE: not documented in AppHub-v2.3.0.md; inferred from a captured
+// devicecontrol request using the "set_monitor_data_report" action.
+func (c *Client) SetSystemLogMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{
+		"set_monitor_data_report": []map[string]interface{}{{"systemd_log_monitor": enabled}},
+	})
 }
 
 // SyncTime triggers an immediate clock sync on the device.
@@ -1252,53 +1244,6 @@ func (c *Client) SetUSBStorageEnabled(agentID string, enabled bool) error {
 // against real firmware.
 func (c *Client) SyncTime(agentID string) error {
 	return c.execAction(agentID, map[string]interface{}{"syncTime": true})
-}
-
-// --- system log ------------------------------------------------------------
-
-// ListSystemLogs returns a page of device system log entries. Any of
-// deviceID, os, keywords may be empty to leave that filter unset; beginTs/
-// endTs are Unix milliseconds, pass 0 to omit either bound.
-func (c *Client) ListSystemLogs(currentPage, limit int, deviceID, os, keywords string, beginTs, endTs int64) ([]SystemLogEntry, error) {
-	q := url.Values{}
-	q.Set("currentpage", fmt.Sprintf("%d", currentPage))
-	q.Set("limit", fmt.Sprintf("%d", limit))
-	if deviceID != "" {
-		q.Set("agentId", deviceID)
-	}
-	if os != "" {
-		q.Set("os", os)
-	}
-	if keywords != "" {
-		q.Set("keywords", keywords)
-	}
-	if beginTs > 0 {
-		q.Set("beginTs", fmt.Sprintf("%d", beginTs))
-	}
-	if endTs > 0 {
-		q.Set("endTs", fmt.Sprintf("%d", endTs))
-	}
-
-	var logs []SystemLogEntry
-	if err := c.do(http.MethodGet, "/api/systemLog/bypage?"+q.Encode(), nil, &logs); err != nil {
-		return nil, err
-	}
-	return logs, nil
-}
-
-// DeleteSystemLog deletes a single system log entry by id.
-func (c *Client) DeleteSystemLog(id int64) error {
-	return c.do(http.MethodDelete, fmt.Sprintf("/api/systemLog/%d", id), nil, nil)
-}
-
-// DeleteSystemLogsByDevice deletes every system log entry for a device.
-func (c *Client) DeleteSystemLogsByDevice(deviceID string) error {
-	return c.do(http.MethodPost, "/api/systemLog/deleteByDeviceId", deleteByDeviceIDRequest{DeviceID: deviceID}, nil)
-}
-
-// BatchDeleteSystemLogs deletes multiple system log entries by id.
-func (c *Client) BatchDeleteSystemLogs(ids []int64) error {
-	return c.do(http.MethodPost, "/api/systemLog/batchDelete", batchIDsRequest{IDs: ids}, nil)
 }
 
 // --- operation records ------------------------------------------------------
@@ -1325,14 +1270,7 @@ func (c *Client) ListOperationRecords(currentPage, limit int, target string, beg
 	if err := c.do(http.MethodGet, "/api/records/byPage?"+q.Encode(), nil, &page); err != nil {
 		return nil, err
 	}
-
-	records := make([]OperationRecord, 0)
-	if page.Data != "" {
-		if err := json.Unmarshal([]byte(page.Data), &records); err != nil {
-			return nil, fmt.Errorf("apphub: decode operation records: %w", err)
-		}
-	}
-	return records, nil
+	return page.Data, nil
 }
 
 // DeleteOperationRecord deletes a single operation record by id.
