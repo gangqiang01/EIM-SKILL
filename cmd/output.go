@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -21,6 +23,26 @@ const (
 	statusOK    = 200
 	statusError = 500
 )
+
+// out is where printJSON/printErrorResult write. It defaults to the real
+// stdout for normal CLI use; the MCP server (see mcp.go) temporarily
+// swaps it per tool call via withCapturedOutput so it can return each
+// command's JSON as the tool result instead of writing to the process's
+// actual stdout (which the MCP stdio transport itself is using for the
+// JSON-RPC channel).
+var out io.Writer = os.Stdout
+
+// withCapturedOutput runs fn with package output redirected to a buffer,
+// returning what was written. Not safe for concurrent use - callers must
+// serialize invocations (see mcp.go's invocation mutex).
+func withCapturedOutput(fn func()) string {
+	var buf bytes.Buffer
+	prev := out
+	out = &buf
+	defer func() { out = prev }()
+	fn()
+	return buf.String()
+}
 
 // printJSON prints data wrapped in the unified success envelope.
 func printJSON(data interface{}) {
@@ -54,10 +76,13 @@ func printErrorResult(err error) {
 func printEnvelope(r result) {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		// Marshaling our own envelope failed - fall back to plain text so
-		// the caller still gets something rather than nothing.
-		fmt.Fprintf(os.Stderr, "eim-skill: failed to render output: %v\n", err)
-		os.Exit(1)
+		// Marshaling our own envelope failed (e.g. a NaN float somewhere in
+		// Data) - write a hand-built fallback rather than exiting the
+		// process, since this now also runs inside the long-running MCP
+		// server (see mcp.go), where os.Exit would kill every in-flight
+		// tool call, not just this one.
+		fmt.Fprintf(out, "{\"status\":%d,\"msg\":%q}\n", statusError, "failed to render output: "+err.Error())
+		return
 	}
-	fmt.Println(string(data))
+	fmt.Fprintln(out, string(data))
 }

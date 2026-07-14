@@ -1,7 +1,7 @@
 # EIM-SKILL
 
 `eim-skill` is a command-line skill tool that wraps
-[DeviceLink](../../../MYPROJECT/BACKEND/DeviceLink)'s device management
+[DeviceOn-EIM](../../../MYPROJECT/BACKEND/DeviceLink)'s device management
 REST API (documented in `/opt/AppHub-v2.3.0.md`) so device operations can be
 driven from the command line or invoked as a skill by an agent.
 
@@ -42,6 +42,10 @@ eim-skill device reboot <endpoint-or-name>                         # reboot a de
 eim-skill device shutdown <endpoint-or-name>                       # shut down a device now
 eim-skill device set-volume <endpoint-or-name> <0-100>             # set audio volume
 eim-skill device set-backlight <endpoint-or-name> <0-100>          # set screen backlight
+eim-skill device reboot-group <group-name> [--label <name>]        # reboot every device in a group
+eim-skill device shutdown-group <group-name> [--label <name>]      # shut down every device in a group
+eim-skill device set-volume-group <group-name> <0-100> [--label <name>]     # set audio volume on every device in a group
+eim-skill device set-backlight-group <group-name> <0-100> [--label <name>] # set screen backlight on every device in a group
 eim-skill group list                                               # list all device groups
 eim-skill group status [group-name]                                # groups' online/warning/error breakdown (all, or one)
 eim-skill group create <name> <type> [description] [--creator <username>]  # add a device group
@@ -61,6 +65,13 @@ filters on, translated so you don't have to know the mapping.
 they are implemented on the same devicecontrol resource as reboot/shutdown,
 inferred from DeviceLink's `PluginsServlet` source. Verify against your
 device firmware before relying on them in production.
+
+`reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
+target every device in a group with a single call, using AppHub's documented
+group-batch devicecontrol resource (`PUT
+/api/plugins/batch/{groupname}/40008/0/27601`) rather than looping over each
+device individually. `--label` optionally narrows the target to devices
+carrying that label.
 
 `device details` is also undocumented (found in `ClientServlet`'s
 `get_1_details`); it's a lighter-weight call than `device get` when you
@@ -234,6 +245,44 @@ increasing priority order:
 
 The repo server accepts the same `accesstoken` issued by the main server's
 `/login`, so no separate repo-server credentials are needed.
+
+## MCP server
+
+```
+eim-skill mcp
+```
+
+Runs `eim-skill` as a [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio, so an MCP-compatible agent/client can call its commands
+directly as tools instead of shelling out to the CLI. Every runnable command
+is auto-exposed as one MCP tool, named by its command path joined with `_`
+(e.g. `device list` → `device_list`, `ota windows-exe apply-group` →
+`ota_windows-exe_apply-group`). A tool's input schema is generated from its
+command's positional args (parsed from `Use`, e.g. `<endpoint-or-name>` is
+required, `[id...]` is an optional repeatable array) and its flags (typed
+`string`/`boolean`/`integer`/`number` per the underlying pflag type, marked
+required where the CLI does via `MarkFlagRequired`). Each tool call returns
+the exact same JSON envelope as the equivalent CLI invocation, as its text
+content, with `IsError` set to true when `status` is `500`.
+
+To register it with an MCP client, point it at the built binary with `mcp`
+as the argument, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "eim-skill": {
+      "command": "/path/to/eim-skill",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Configuration (base URL, credentials, repo server URL) is read the same way
+as for direct CLI use (see [Configuration](#configuration) below) - set it
+via `conf/config.yaml`, environment variables, or pass extra CLI flags in
+`args` (e.g. `["mcp", "--config", "/path/to/config.yaml"]`).
 
 ## Skills
 

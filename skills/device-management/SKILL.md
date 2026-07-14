@@ -22,6 +22,8 @@ AppHub server.
 - "What are device X's cpu/memory/storage/network specs" / "查看设备X的CPU/内存/存储/网络信息" → `device details`
 - "Reboot / shut down device X" / "重启设备X" / "关闭设备X" / "设备关机" → `device reboot` / `device shutdown`
 - "Turn the volume/screen brightness up/down on device X" / "设置设备X的音量" / "设置设备X的背光/亮度" → `device set-volume` / `device set-backlight`
+- "Reboot / shut down every device in group Y" / "重启设备组Y下所有设备" / "给设备组Y批量关机" → `device reboot-group` / `device shutdown-group`
+- "Set the volume/brightness for every device in group Y" / "给设备组Y批量设置音量/背光" → `device set-volume-group` / `device set-backlight-group`
 - "Disable the USB port on device X" (data-leak-prevention style request) / "禁用设备X的U盘/USB存储" → `device usb set-storage`
 - "Sync the clock on device X" / "同步设备X的时间" → `device sync-time`
 - "Add device X to group Y" / "delete device X" / "把设备X添加到设备组Y" / "删除设备X" → `device add-to-group` / `device delete`
@@ -53,6 +55,10 @@ eim-skill device reboot <endpoint-or-name>
 eim-skill device shutdown <endpoint-or-name>
 eim-skill device set-volume <endpoint-or-name> <0-100>
 eim-skill device set-backlight <endpoint-or-name> <0-100>
+eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
+eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
+eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
+eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
 eim-skill device usb get-storage <endpoint-or-name>              # is USB mass storage enabled?
 eim-skill device usb set-storage <endpoint-or-name> <on|off>
 eim-skill device sync-time <endpoint-or-name>
@@ -82,6 +88,12 @@ every device-targeting command resolves it against the live device list.
   `PluginsServlet` Java source (the same devicecontrol resource used for
   the documented reboot/shutdown actions). Verify against real device
   firmware before relying on them in an unattended workflow.
+- `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
+  target every device in a group in one call (documented in
+  AppHub-v2.3.0.md as "PUT send command-向批量设备发送命令",
+  `/api/plugins/batch/{groupname}/40008/0/27601`) rather than looping over
+  `device list --group` and calling the single-device command per device.
+  `--label` optionally narrows the target to devices carrying that label.
 - `device details` is also undocumented (found in `ClientServlet`'s
   `get_1_details`) - it's a lighter-weight call than `device get` when you
   only need the system-info blob, not the full device record (online

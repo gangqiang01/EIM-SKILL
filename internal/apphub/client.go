@@ -969,6 +969,57 @@ func (c *Client) SetBacklight(agentID string, brightness int) error {
 	return c.execAction(agentID, map[string]interface{}{"brightness": brightness})
 }
 
+// batchDevicecontrolPath is the group counterpart of devicecontrolPath: see
+// AppHub-v2.3.0.md "PUT send command-向批量设备发送命令"
+// (PUT /api/plugins/batch/{groupname}/40008/0/27601).
+func batchDevicecontrolPath(groupName string) string {
+	return fmt.Sprintf("/api/plugins/batch/%s/40008/0/27601", url.PathEscape(groupName))
+}
+
+// execActionGroup sends a devicecontrol action to every device in groupName
+// (optionally further filtered to devices matching labelName, which may be
+// empty).
+func (c *Client) execActionGroup(groupName string, actions map[string]interface{}, labelName string) error {
+	actionsBytes, err := json.Marshal(actions)
+	if err != nil {
+		return err
+	}
+
+	valueBytes, err := json.Marshal(actionValue{
+		PluginName: "devicecontrol",
+		Actions:    string(actionsBytes),
+	})
+	if err != nil {
+		return err
+	}
+
+	body := execActionGroupRequest{ID: devicecontrolResourceID, Value: string(valueBytes), LabelName: labelName}
+	var sr statusResponse
+	return c.do(http.MethodPut, batchDevicecontrolPath(groupName), body, &sr)
+}
+
+// RebootGroup immediately reboots every device in groupName.
+func (c *Client) RebootGroup(groupName, labelName string) error {
+	return c.execActionGroup(groupName, map[string]interface{}{"reboot": true}, labelName)
+}
+
+// ShutdownGroup immediately shuts down every device in groupName.
+func (c *Client) ShutdownGroup(groupName, labelName string) error {
+	return c.execActionGroup(groupName, map[string]interface{}{"shutdown": true}, labelName)
+}
+
+// SetVolumeGroup sets the system audio volume (0-100) on every device in
+// groupName. See the NOTE on SetVolume - undocumented, best effort.
+func (c *Client) SetVolumeGroup(groupName string, volume int, labelName string) error {
+	return c.execActionGroup(groupName, map[string]interface{}{"audio": volume}, labelName)
+}
+
+// SetBacklightGroup sets the screen backlight/brightness (0-100) on every
+// device in groupName. See the NOTE on SetBacklight - undocumented, best effort.
+func (c *Client) SetBacklightGroup(groupName string, brightness int, labelName string) error {
+	return c.execActionGroup(groupName, map[string]interface{}{"brightness": brightness}, labelName)
+}
+
 // getPluginAction issues a devicecontrol "read" action against resource
 // 40008/0/27600 (the GET counterpart of execAction's 27601), returning the
 // raw content.value string for the caller to decode. See DeviceLink's

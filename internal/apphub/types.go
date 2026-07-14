@@ -265,6 +265,15 @@ type execActionRequest struct {
 	Value string `json:"value"`
 }
 
+// execActionGroupRequest is the body for the group-batch devicecontrol
+// resource (PUT /api/plugins/batch/{groupname}/40008/0/27601), used to
+// reboot/shutdown/set-volume/set-backlight every device in a group at once.
+type execActionGroupRequest struct {
+	ID        int    `json:"id"`
+	Value     string `json:"value"`
+	LabelName string `json:"labelName,omitempty"`
+}
+
 type actionValue struct {
 	PluginName string `json:"pluginname"`
 	Actions    string `json:"actions"`

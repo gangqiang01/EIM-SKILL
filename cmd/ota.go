@@ -907,7 +907,7 @@ func init() {
 }
 
 var otaFileListCmd = &cobra.Command{
-	Use:   "list <file-name>",
+	Use:   "list",
 	Short: "List files available in the repo server for a given --type",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

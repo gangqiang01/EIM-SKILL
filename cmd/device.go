@@ -26,6 +26,10 @@ func init() {
 	deviceCmd.AddCommand(deviceShutdownCmd)
 	deviceCmd.AddCommand(deviceSetVolumeCmd)
 	deviceCmd.AddCommand(deviceSetBacklightCmd)
+	deviceCmd.AddCommand(deviceRebootGroupCmd)
+	deviceCmd.AddCommand(deviceShutdownGroupCmd)
+	deviceCmd.AddCommand(deviceSetVolumeGroupCmd)
+	deviceCmd.AddCommand(deviceSetBacklightGroupCmd)
 
 	deviceListCmd.Flags().String("group", "", "only list devices in this device group")
 	deviceListCmd.Flags().Bool("online", false, "only list online devices")
@@ -37,6 +41,10 @@ func init() {
 	deviceMonitorCmd.Flags().Int64("begin", 0, "only return samples at or after this Unix millisecond timestamp")
 	deviceMonitorCmd.Flags().Int64("end", 0, "only return samples at or before this Unix millisecond timestamp")
 	_ = deviceMonitorCmd.MarkFlagRequired("type")
+
+	for _, c := range []*cobra.Command{deviceRebootGroupCmd, deviceShutdownGroupCmd, deviceSetVolumeGroupCmd, deviceSetBacklightGroupCmd} {
+		c.Flags().String("label", "", "only target devices with this label")
+	}
 }
 
 var deviceListCmd = &cobra.Command{
@@ -330,6 +338,88 @@ var deviceSetBacklightCmd = &cobra.Command{
 			return err
 		}
 		if err := client.SetBacklight(endpoint, brightness); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceRebootGroupCmd = &cobra.Command{
+	Use:   "reboot-group <group-name>",
+	Short: "Reboot every device in a device group immediately",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		label, _ := cmd.Flags().GetString("label")
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		if err := client.RebootGroup(args[0], label); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceShutdownGroupCmd = &cobra.Command{
+	Use:   "shutdown-group <group-name>",
+	Short: "Shut down every device in a device group immediately",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		label, _ := cmd.Flags().GetString("label")
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		if err := client.ShutdownGroup(args[0], label); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceSetVolumeGroupCmd = &cobra.Command{
+	Use:   "set-volume-group <group-name> <0-100>",
+	Short: "Set the system audio volume on every device in a device group (best effort, see NOTE in internal/apphub)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		volume, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("volume must be an integer 0-100: %w", err)
+		}
+		label, _ := cmd.Flags().GetString("label")
+
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		if err := client.SetVolumeGroup(args[0], volume, label); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceSetBacklightGroupCmd = &cobra.Command{
+	Use:   "set-backlight-group <group-name> <0-100>",
+	Short: "Set the screen backlight/brightness on every device in a device group (best effort, see NOTE in internal/apphub)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		brightness, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("brightness must be an integer 0-100: %w", err)
+		}
+		label, _ := cmd.Flags().GetString("label")
+
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		if err := client.SetBacklightGroup(args[0], brightness, label); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
