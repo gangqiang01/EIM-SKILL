@@ -32,10 +32,20 @@ Package types 软件包类型:
   windows-zip   Windows zip/压缩包
   docker        Docker compose/swarm 编排包
   file          通用文件（不区分类型的任意文件）
+  bsp           BSP/系统镜像更新（仅支持 status 查询，见下）
 
 --name/--version must exactly match an entry from that type's "list"
 command, name/version 必须和对应 "list" 命令返回结果里的名称/版本号
-完全一致才能找到并部署。`,
+完全一致才能找到并部署。
+
+Every type except "bsp" also has a "status" command to check a device's
+most recent OTA task status (queued/running/success/failed) - see each
+type's "status" subcommand help for important caveats about how reliable
+that specific type's status query is.
+
+除 "bsp" 外，每种类型都有一个 "status" 命令用来查询设备最近一次OTA
+任务的状态（排队/执行中/成功/失败）——具体可靠程度请看各类型 "status"
+子命令自己的详细说明。`,
 }
 
 func init() {
@@ -46,7 +56,32 @@ func init() {
 	otaCmd.AddCommand(otaWindowsZipCmd)
 	otaCmd.AddCommand(otaDockerCmd)
 	otaCmd.AddCommand(otaFileCmd)
+	otaCmd.AddCommand(otaBspCmd)
 }
+
+// appDeployStatusLongNote is appended to every appstatusmgr-backed type's
+// "status" command help (every type except "bsp", which uses its own
+// dedicated, type-param-free endpoint - see otaBspStatusCmd).
+const appDeployStatusLongNote = `
+
+UNVERIFIED 未验证: not documented in AppHub-v2.3.0.md - found via an
+apifox-exported OpenAPI spec and confirmed to respond successfully
+against a live server, but that server had zero OTA task history
+recorded at the time, so the non-empty response shape and the "type"
+business-classifier's value for this specific package type could not be
+confirmed against real data. Only Android's value ("sg") is documented
+(as a "fixed value") anywhere; this command reuses "sg" for every
+package type on the assumption it's shared across the whole appstatusmgr
+manager rather than varying per type - verify against your own server
+before relying on this in an unattended workflow.
+
+未在 AppHub-v2.3.0.md 中记录——通过 apifox 导出的 OpenAPI 文档找到，
+已确认对真实服务器请求能成功返回，但该服务器当时没有任何OTA任务历史
+记录，因此无法验证有数据时的返回结构、也无法验证这个具体包类型对应的
+"type" 分类参数取值是否正确。文档里唯一明确记录的取值是 Android 的
+"sg"（且被描述为"固定值"）；本命令对所有包类型都复用 "sg"，假设它是
+整个 appstatusmgr 管理器共用的取值而非按类型区分——正式无人值守流程
+使用前请先在你自己的服务器上验证。`
 
 func otaTaskname() string {
 	return fmt.Sprintf("ota-%d", time.Now().UnixMilli())
@@ -70,6 +105,7 @@ both cases.
 func init() {
 	otaLinuxCmd.AddCommand(otaLinuxListCmd)
 	otaLinuxCmd.AddCommand(otaLinuxInstalledCmd)
+	otaLinuxCmd.AddCommand(otaLinuxStatusCmd)
 	otaLinuxCmd.AddCommand(otaLinuxApplyCmd)
 	otaLinuxCmd.AddCommand(otaLinuxApplyGroupCmd)
 	otaLinuxApplyGroupCmd.Flags().String("label", "", "only target devices in the group that also carry this label (只对组内带有该标签的设备生效)")
@@ -143,6 +179,36 @@ Example output 输出示例 (real 真实返回):
 			return err
 		}
 		printJSON(pkgs)
+		return nil
+	},
+}
+
+var otaLinuxStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent Linux OTA task status",
+	Long: `Get the most recent Linux package OTA task status for a device (e.g.
+queued/running/success/failed, per whatever "apply"/"apply-group" call
+was last made against it).
+
+获取设备最近一次 Linux 软件包 OTA 任务的状态（如排队/执行中/成功/
+失败，对应最近一次对它调用 "apply"/"apply-group" 的结果）。
+
+Example 示例: eim-skill ota linux status "146打包机"` + appDeployStatusLongNote,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetAppDeployStatus(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
 		return nil
 	},
 }
@@ -265,6 +331,7 @@ resource ("apply"/"apply-group" cover both); uninstall is separate.
 func init() {
 	otaAndroidCmd.AddCommand(otaAndroidListCmd)
 	otaAndroidCmd.AddCommand(otaAndroidInstalledCmd)
+	otaAndroidCmd.AddCommand(otaAndroidStatusCmd)
 	otaAndroidCmd.AddCommand(otaAndroidApplyCmd)
 	otaAndroidCmd.AddCommand(otaAndroidApplyGroupCmd)
 	otaAndroidCmd.AddCommand(otaAndroidUninstallCmd)
@@ -322,6 +389,45 @@ Example 示例: eim-skill ota android installed "<android-device>"`,
 			return err
 		}
 		raw, err := client.GetInstalledAndroidApps(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
+		return nil
+	},
+}
+
+var otaAndroidStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent Android OTA task status",
+	Long: `Get the most recent Android app OTA task status for a device (e.g.
+queued/running/success/failed, per whatever "apply"/"apply-group" call
+was last made against it).
+
+获取设备最近一次 Android 应用 OTA 任务的状态（如排队/执行中/成功/
+失败，对应最近一次对它调用 "apply"/"apply-group" 的结果）。
+
+This is the one package type where the underlying "type" query value
+("sg") is actually documented in AppHub-v2.3.0.md (as a fixed literal for
+this exact query) - so this specific status command is on more solid
+ground than its Linux/Windows/Docker siblings.
+
+这是唯一一个底层 "type" 查询取值（"sg"）在 AppHub-v2.3.0.md 中确有
+文档记录（该文档明确标注为此查询的固定值）的包类型——所以这条
+status 命令比 Linux/Windows/Docker 的对应命令更有把握。
+
+Example 示例: eim-skill ota android status "<android-device>"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetAppDeployStatus(endpoint)
 		if err != nil {
 			return err
 		}
@@ -477,13 +583,13 @@ collapsed "apply".
 func init() {
 	otaWindowsExeCmd.AddCommand(otaWindowsExeListCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeInstalledCmd)
+	otaWindowsExeCmd.AddCommand(otaWindowsExeStatusCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeInstallCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeInstallGroupCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUpgradeCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUpgradeGroupCmd)
 	otaWindowsExeCmd.AddCommand(otaWindowsExeUninstallCmd)
-	otaWindowsExeUninstallCmd.Flags().String("tool", "", `packaging tool used to build the installer: "Inno Setup" or "WiX Toolset" (required) - 打包该安装包所用的工具（必填）`)
-	_ = otaWindowsExeUninstallCmd.MarkFlagRequired("tool")
+	otaWindowsExeUninstallCmd.Flags().String("tool", "Inno Setup", `packaging tool used to build the installer: "Inno Setup" or "WiX Toolset" (default: "Inno Setup") - 打包该安装包所用的工具（默认："Inno Setup"）`)
 }
 
 var otaWindowsExeListCmd = &cobra.Command{
@@ -537,6 +643,36 @@ Example 示例: eim-skill ota windows-exe installed "<windows-device>"`,
 			return err
 		}
 		raw, err := client.GetInstalledWindowsExePackages(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
+		return nil
+	},
+}
+
+var otaWindowsExeStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent Windows exe OTA task status",
+	Long: `Get the most recent Windows exe package OTA task status for a device
+(e.g. queued/running/success/failed, per whatever "install"/"upgrade"
+call was last made against it).
+
+获取设备最近一次 Windows exe 软件包 OTA 任务的状态（如排队/执行中/
+成功/失败，对应最近一次对它调用 "install"/"upgrade" 的结果）。
+
+Example 示例: eim-skill ota windows-exe status "<windows-device>"` + appDeployStatusLongNote,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetAppDeployStatus(endpoint)
 		if err != nil {
 			return err
 		}
@@ -693,18 +829,20 @@ func lookupWindowsExe(client *apphub.Client, projectName, version string) (*repo
 }
 
 var otaWindowsExeUninstallCmd = &cobra.Command{
-	Use:   "uninstall <endpoint-or-name> <project-name> <version> --tool <tool>",
-	Short: "Uninstall an exe package from a single device",
+	Use:   "uninstall <endpoint-or-name> <project-name> <version> [--tool <tool>]",
+	Short: `Uninstall an exe package from a single device (--tool defaults to "Inno Setup")`,
 	Long: `Uninstall an exe package from a single device. Unlike install/upgrade
 (which read the packaging tool from the repo listing automatically),
-uninstall requires you to pass --tool explicitly ("Inno Setup" or "WiX
-Toolset", matching how the package was originally installed).
+uninstall needs to know which tool built the installer - pass --tool
+explicitly if the package was built with "WiX Toolset"; it defaults to
+"Inno Setup" when omitted.
 
 从单台设备上卸载 exe 软件包。和 install/upgrade（会自动从仓库信息里
-读取打包工具）不同，卸载需要你显式传入 --tool（"Inno Setup" 或
-"WiX Toolset"，必须和当初安装时使用的工具一致）。
+读取打包工具）不同，卸载需要知道安装包是用哪个工具打包的——如果是
+"WiX Toolset" 打包的，需要显式传入 --tool；不传时默认为 "Inno Setup"。
 
-Example 示例: eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0.0 --tool "Inno Setup"
+Example 示例: eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0.0
+       eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0.0 --tool "WiX Toolset"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
 	Args: cobra.ExactArgs(3),
@@ -742,6 +880,7 @@ with --parameter arguments, unlike the installer-driven windows-exe type).
 func init() {
 	otaWindowsZipCmd.AddCommand(otaWindowsZipListCmd)
 	otaWindowsZipCmd.AddCommand(otaWindowsZipInstalledCmd)
+	otaWindowsZipCmd.AddCommand(otaWindowsZipStatusCmd)
 	otaWindowsZipCmd.AddCommand(otaWindowsZipInstallCmd)
 	otaWindowsZipCmd.AddCommand(otaWindowsZipInstallGroupCmd)
 	otaWindowsZipCmd.AddCommand(otaWindowsZipUpdateCmd)
@@ -806,6 +945,36 @@ Example 示例: eim-skill ota windows-zip installed "<windows-device>"`,
 			return err
 		}
 		raw, err := client.GetInstalledWindowsZipPackages(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
+		return nil
+	},
+}
+
+var otaWindowsZipStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent Windows zip OTA task status",
+	Long: `Get the most recent Windows zip package OTA task status for a device
+(e.g. queued/running/success/failed, per whatever "install"/"update"
+call was last made against it).
+
+获取设备最近一次 Windows zip 软件包 OTA 任务的状态（如排队/执行中/
+成功/失败，对应最近一次对它调用 "install"/"update" 的结果）。
+
+Example 示例: eim-skill ota windows-zip status "<windows-device>"` + appDeployStatusLongNote,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetAppDeployStatus(endpoint)
 		if err != nil {
 			return err
 		}
@@ -1003,6 +1172,7 @@ command in this group. 想查看设备上已部署/运行的容器，请用
 
 func init() {
 	otaDockerCmd.AddCommand(otaDockerListCmd)
+	otaDockerCmd.AddCommand(otaDockerStatusCmd)
 	otaDockerCmd.AddCommand(otaDockerApplyCmd)
 	otaDockerCmd.AddCommand(otaDockerApplyGroupCmd)
 	otaDockerCmd.AddCommand(otaDockerUninstallCmd)
@@ -1037,6 +1207,40 @@ Docker 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
 			return err
 		}
 		printJSON(pkgs)
+		return nil
+	},
+}
+
+var otaDockerStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent Docker OTA task status",
+	Long: `Get the most recent Docker compose/swarm package OTA task status for a
+device (e.g. queued/running/success/failed, per whatever "apply"/
+"apply-group" call was last made against it). For what's currently
+deployed/running (a live snapshot, not task history), use
+"device docker info" instead.
+
+获取设备最近一次 Docker compose/swarm 编排包 OTA 任务的状态（如排队/
+执行中/成功/失败，对应最近一次对它调用 "apply"/"apply-group" 的
+结果）。如果想看当前实际部署/运行的容器（实时快照，而非任务历史），
+请用 "device docker info"。
+
+Example 示例: eim-skill ota docker status "146打包机"` + appDeployStatusLongNote,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetAppDeployStatus(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
 		return nil
 	},
 }
@@ -1188,11 +1392,15 @@ no unconditional "list every file regardless of type" endpoint.
 
 func init() {
 	otaFileCmd.AddCommand(otaFileListCmd)
+	otaFileCmd.AddCommand(otaFileStatusCmd)
 	otaFileCmd.AddCommand(otaFileDeployCmd)
 	otaFileCmd.AddCommand(otaFileDeployGroupCmd)
 
 	otaFileListCmd.Flags().String("type", "", "repo file category/type (required) - 仓库里文件的分类/类型（必填）")
 	_ = otaFileListCmd.MarkFlagRequired("type")
+
+	otaFileStatusCmd.Flags().String("type", "", "repo file category/type (required, matches how the file was uploaded) - 仓库里文件的分类/类型（必填，需和上传时一致）")
+	_ = otaFileStatusCmd.MarkFlagRequired("type")
 
 	for _, c := range []*cobra.Command{otaFileDeployCmd, otaFileDeployGroupCmd} {
 		c.Flags().String("type", "", "repo file category/type (required, matches how the file was uploaded) - 仓库里文件的分类/类型（必填，需和上传时一致）")
@@ -1231,6 +1439,49 @@ Example output 输出示例 (empty when nothing uploaded under that type
 			return err
 		}
 		printJSON(files)
+		return nil
+	},
+}
+
+var otaFileStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name> --type <type>",
+	Short: "Get a device's most recent generic-file OTA task status",
+	Long: `Get the most recent generic-file deployment task status for a device
+under repo category --type (e.g. queued/running/success/failed, per
+whatever "deploy"/"deploy-group" call was last made against it).
+
+获取设备最近一次某个 --type 分类下的通用文件部署任务状态（如排队/
+执行中/成功/失败，对应最近一次对它调用 "deploy"/"deploy-group" 的
+结果）。
+
+Example 示例: eim-skill ota file status "146打包机" --type deploy
+
+UNVERIFIED 未验证: not documented in AppHub-v2.3.0.md - found via an
+apifox-exported OpenAPI spec (fileDeployApi.js) and confirmed to respond
+successfully against a live server, but that server had zero file-deploy
+task history recorded at the time, so the non-empty response shape could
+not be confirmed against real data.
+
+未在 AppHub-v2.3.0.md 中记录——通过 apifox 导出的 OpenAPI 文档
+（fileDeployApi.js）找到，已确认对真实服务器请求能成功返回，但该
+服务器当时没有任何文件部署任务历史记录，因此无法验证有数据时的
+实际返回结构。`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fileType, _ := cmd.Flags().GetString("type")
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetFileDeployStatus(endpoint, fileType)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
 		return nil
 	},
 }
@@ -1333,6 +1584,74 @@ Example 示例: eim-skill ota file deploy-group default report.pdf /home/user/re
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED", "taskname": taskname, "downloadpath": downloadPath})
+		return nil
+	},
+}
+
+// ==================== BSP / system update ====================
+
+var otaBspCmd = &cobra.Command{
+	Use:   "bsp",
+	Short: "Query BSP/system-image update status",
+	Long: `Query BSP (Board Support Package)/system-image update deployment
+status. Unlike the other OTA package types, this CLI only exposes a
+"status" query for BSP - there is no "list"/"apply" here, since browsing
+and pushing BSP images was out of scope for this feature; only checking
+a device's most recent BSP update status was requested.
+
+查询 BSP（板级支持包）/系统镜像更新的部署状态。和其他 OTA
+包类型不同，这里只提供 "status" 查询——没有 "list"/"apply"，
+因为浏览和推送 BSP 镜像本身不在这次功能范围内，只需要能查询
+设备最近一次 BSP 更新的状态。`,
+}
+
+func init() {
+	otaBspCmd.AddCommand(otaBspStatusCmd)
+}
+
+var otaBspStatusCmd = &cobra.Command{
+	Use:   "status <endpoint-or-name>",
+	Short: "Get a device's most recent BSP/system-update task status",
+	Long: `Get the most recent BSP (Board Support Package)/system-image update
+task status for a device (e.g. queued/running/success/failed).
+
+获取设备最近一次 BSP（板级支持包）/系统镜像更新任务的状态（如排队/
+执行中/成功/失败）。
+
+Example 示例: eim-skill ota bsp status "146打包机"
+
+UNVERIFIED 未验证: not documented in AppHub-v2.3.0.md - found via an
+apifox-exported OpenAPI spec (updateBSPApi.js) and confirmed to respond
+successfully against a live server, but that server had zero BSP-update
+task history recorded at the time, so the non-empty response shape could
+not be confirmed against real data. Unlike the appstatusmgr-backed status
+commands (linux/android/windows-exe/windows-zip/docker), this endpoint
+takes no "type" business-classifier parameter at all, so there's no
+per-type value to guess - the only real uncertainty here is the shape of
+a populated response.
+
+未在 AppHub-v2.3.0.md 中记录——通过 apifox 导出的 OpenAPI 文档
+（updateBSPApi.js）找到，已确认对真实服务器请求能成功返回，但该
+服务器当时没有任何 BSP 更新任务历史记录，因此无法验证有数据时的
+实际返回结构。和依赖 appstatusmgr 的其他 status 命令（linux/android/
+windows-exe/windows-zip/docker）不同，这个接口完全不需要 "type"
+业务分类参数，所以不存在猜测取值的问题——唯一的不确定性只是"有数据
+时具体长什么样"。`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		raw, err := client.GetBSPUpdateStatus(endpoint)
+		if err != nil {
+			return err
+		}
+		printRawJSON(raw)
 		return nil
 	},
 }

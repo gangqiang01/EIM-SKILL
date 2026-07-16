@@ -214,25 +214,29 @@ the DeviceOn-EIM web console uses.
 ```
 eim-skill ota linux list                                            # packages available in the repo
 eim-skill ota linux installed <endpoint-or-name>                    # packages installed on a device
+eim-skill ota linux status <endpoint-or-name>                       # most recent OTA task status
 eim-skill ota linux apply <endpoint-or-name> <product-name> <version>
 eim-skill ota linux apply-group <group-name> <product-name> <version> [--label <name>]
 
 eim-skill ota android list
 eim-skill ota android installed <endpoint-or-name>
+eim-skill ota android status <endpoint-or-name>
 eim-skill ota android apply <endpoint-or-name> <pkg-name> <version>
 eim-skill ota android apply-group <group-name> <pkg-name> <version> [--label <name>]
 eim-skill ota android uninstall <endpoint-or-name> <pkg-name>
 
 eim-skill ota windows-exe list
 eim-skill ota windows-exe installed <endpoint-or-name>
+eim-skill ota windows-exe status <endpoint-or-name>
 eim-skill ota windows-exe install <endpoint-or-name> <project-name> <version>
 eim-skill ota windows-exe install-group <group-name> <project-name> <version>
 eim-skill ota windows-exe upgrade <endpoint-or-name> <project-name> <version>
 eim-skill ota windows-exe upgrade-group <group-name> <project-name> <version>
-eim-skill ota windows-exe uninstall <endpoint-or-name> <project-name> <version> --tool <tool>
+eim-skill ota windows-exe uninstall <endpoint-or-name> <project-name> <version> [--tool <tool>]
 
 eim-skill ota windows-zip list
 eim-skill ota windows-zip installed <endpoint-or-name>
+eim-skill ota windows-zip status <endpoint-or-name>
 eim-skill ota windows-zip install <endpoint-or-name> <project-name> <version> [--parameter <args>]
 eim-skill ota windows-zip install-group <group-name> <project-name> <version> [--parameter <args>] [--label <name>]
 eim-skill ota windows-zip update <endpoint-or-name> <project-name> <version> [--parameter <args>]
@@ -240,19 +244,24 @@ eim-skill ota windows-zip update-group <group-name> <project-name> <version> [--
 eim-skill ota windows-zip uninstall <endpoint-or-name> <project-name> <version>
 
 eim-skill ota docker list
+eim-skill ota docker status <endpoint-or-name>
 eim-skill ota docker apply <endpoint-or-name> <tag> <version>
 eim-skill ota docker apply-group <group-name> <tag> <version> [--label <name>]
 eim-skill ota docker uninstall <endpoint-or-name> <tag> <version>
 
 eim-skill ota file list --type <type>
+eim-skill ota file status <endpoint-or-name> --type <type>
 eim-skill ota file deploy <endpoint-or-name> <file-name> <save-path> --type <type> [--exec]
 eim-skill ota file deploy-group <group-name> <file-name> <save-path> --type <type> [--exec] [--label <name>]
+
+eim-skill ota bsp status <endpoint-or-name>                         # BSP/system-image update status (status-only, no list/apply)
 ```
 
 Notes:
-- `windows-exe` needs `--tool` matching how the package was uploaded
-  ("Inno Setup" or "WiX Toolset") for uninstall; `install`/`upgrade` read
-  it from the repo listing automatically.
+- `windows-exe uninstall`'s `--tool` defaults to `"Inno Setup"`; pass
+  `--tool "WiX Toolset"` explicitly if that's how the package was built.
+  `install`/`upgrade` read it from the repo listing automatically, no flag
+  needed either way.
 - Android/Docker/Linux have one resource for both install and update (the
   server distinguishes by whether the package is already present); Windows
   has genuinely separate install vs. upgrade resources, so this CLI
@@ -260,6 +269,17 @@ Notes:
 - `ota file list`/`deploy`/`deploy-group` require `--type`, matching
   whatever category the file was uploaded under in the repo server (e.g.
   `deploy`) - there is no unconditional "list all files" endpoint.
+- `ota <type> status` (every type, including `bsp`) queries a device's
+  most recent OTA/BSP task status. None of these are documented in
+  AppHub-v2.3.0.md - found via an apifox-exported OpenAPI spec of AppHub's
+  own web console, and confirmed to respond successfully against a live
+  server, but that server had zero task history recorded, so no command's
+  non-empty response shape is confirmed. `linux`/`android`/`windows-exe`/
+  `windows-zip`/`docker` share a backend keyed by a "type" classifier
+  that's only documented for Android (fixed value `"sg"`); all five reuse
+  `"sg"` on an unverified assumption it's shared manager-wide. `bsp` has
+  its own dedicated, type-param-free backend, so it carries less risk.
+  See `skills/ota-deployment/SKILL.md` for the full breakdown.
 - Verified live against a real server: all five repo-listing endpoints,
   and the full device-resolve → repo-lookup → error-handling pipeline
   (`ota file list --type deploy` returned real repo data matching this

@@ -195,25 +195,29 @@ DeviceOn-EIM 服务器不能直接把文件推送给你，所以 `log agent requ
 ```
 eim-skill ota linux list                                            # 仓库里可部署的软件包
 eim-skill ota linux installed <endpoint-or-name>                    # 设备上已安装的软件包
+eim-skill ota linux status <endpoint-or-name>                       # 最近一次OTA任务的状态
 eim-skill ota linux apply <endpoint-or-name> <product-name> <version>
 eim-skill ota linux apply-group <group-name> <product-name> <version> [--label <name>]
 
 eim-skill ota android list
 eim-skill ota android installed <endpoint-or-name>
+eim-skill ota android status <endpoint-or-name>
 eim-skill ota android apply <endpoint-or-name> <pkg-name> <version>
 eim-skill ota android apply-group <group-name> <pkg-name> <version> [--label <name>]
 eim-skill ota android uninstall <endpoint-or-name> <pkg-name>
 
 eim-skill ota windows-exe list
 eim-skill ota windows-exe installed <endpoint-or-name>
+eim-skill ota windows-exe status <endpoint-or-name>
 eim-skill ota windows-exe install <endpoint-or-name> <project-name> <version>
 eim-skill ota windows-exe install-group <group-name> <project-name> <version>
 eim-skill ota windows-exe upgrade <endpoint-or-name> <project-name> <version>
 eim-skill ota windows-exe upgrade-group <group-name> <project-name> <version>
-eim-skill ota windows-exe uninstall <endpoint-or-name> <project-name> <version> --tool <tool>
+eim-skill ota windows-exe uninstall <endpoint-or-name> <project-name> <version> [--tool <tool>]
 
 eim-skill ota windows-zip list
 eim-skill ota windows-zip installed <endpoint-or-name>
+eim-skill ota windows-zip status <endpoint-or-name>
 eim-skill ota windows-zip install <endpoint-or-name> <project-name> <version> [--parameter <args>]
 eim-skill ota windows-zip install-group <group-name> <project-name> <version> [--parameter <args>] [--label <name>]
 eim-skill ota windows-zip update <endpoint-or-name> <project-name> <version> [--parameter <args>]
@@ -221,24 +225,37 @@ eim-skill ota windows-zip update-group <group-name> <project-name> <version> [--
 eim-skill ota windows-zip uninstall <endpoint-or-name> <project-name> <version>
 
 eim-skill ota docker list
+eim-skill ota docker status <endpoint-or-name>
 eim-skill ota docker apply <endpoint-or-name> <tag> <version>
 eim-skill ota docker apply-group <group-name> <tag> <version> [--label <name>]
 eim-skill ota docker uninstall <endpoint-or-name> <tag> <version>
 
 eim-skill ota file list --type <type>
+eim-skill ota file status <endpoint-or-name> --type <type>
 eim-skill ota file deploy <endpoint-or-name> <file-name> <save-path> --type <type> [--exec]
 eim-skill ota file deploy-group <group-name> <file-name> <save-path> --type <type> [--exec] [--label <name>]
+
+eim-skill ota bsp status <endpoint-or-name>                         # BSP/系统镜像更新状态（仅支持status，无list/apply）
 ```
 
 说明：
-- `windows-exe` 卸载时需要 `--tool` 参数，且必须和当初打包上传时使用的
-  工具一致（"Inno Setup" 或 "WiX Toolset"）；`install`/`upgrade` 会自动
-  从仓库信息里读取，无需手动指定。
+- `windows-exe uninstall` 的 `--tool` 默认为 `"Inno Setup"`；如果安装包
+  是用 "WiX Toolset" 打包的，需要显式传 `--tool "WiX Toolset"`。
+  `install`/`upgrade` 都会自动从仓库信息里读取，两种情况都无需手动指定。
 - Android/Docker/Linux 的安装和更新共用同一个设备端接口（服务器会根据
   包是否已安装来判断）；Windows 的安装和升级在设备端是真正独立的两个
   接口，所以本CLI用独立的命令表示，而不是合并成一个。
 - `ota file list`/`deploy`/`deploy-group` 都需要 `--type`，且必须和文件
   当初上传到仓库时所属的分类一致——没有"不区分类型列出所有文件"的接口。
+- `ota <type> status`（包括 `bsp`）查询设备最近一次 OTA/BSP 任务的状态。
+  这些命令均未在 AppHub-v2.3.0.md 中记录——通过 apifox 导出的 AppHub
+  网页控制台 OpenAPI 文档找到，已确认对真实服务器请求能成功返回，但
+  该服务器当时没有任何任务历史记录，因此没有一个命令的"有数据时"返回
+  结构得到过验证。`linux`/`android`/`windows-exe`/`windows-zip`/`docker`
+  共用一个后端，其 "type" 分类参数只有 Android 的取值（固定值 "sg"）
+  有文档记录；这五个命令都复用 "sg"，假设它是整个管理器共用的，但除
+  Android 外均未验证。`bsp` 使用完全独立、不需要 type 参数的后端，
+  风险相对更低。完整说明见 `skills/ota-deployment/SKILL.md`。
 - 已针对真实服务器验证：全部五种软件包类型的仓库列表接口，以及完整的
   "设备名解析 → 仓库查找 → 错误处理"流程（`ota file list --type deploy`
   返回的真实仓库数据与本CLI的结构体完全一致）。每种类型最终推送到设备

@@ -908,6 +908,67 @@ func (c *Client) DeployFileToGroup(groupName, taskname, savePath, filename, down
 	return c.do(http.MethodPost, path, body, &sr)
 }
 
+// --- OTA deploy status ------------------------------------------------------
+//
+// These endpoints are not documented in AppHub-v2.3.0.md; they were found
+// via an apifox-exported OpenAPI spec (apphub-web's appStatusApi.js/
+// fileDeployApi.js/updateBSPApi.js source files) and confirmed to respond
+// (200, no error) against a live server, but this environment had zero
+// deploy-task history recorded at the time, so the exact non-empty
+// response shape and the "type" business-classifier's value per package
+// type are NOT independently confirmed beyond Android (documented as the
+// fixed literal "sg" for /api/appstatusmgr/bypageindevid). GetAppDeployStatus
+// is used as-is (type="sg") for every appstatusmgr-backed package type
+// (linux/android/windows-exe/windows-zip/docker) since "sg" is described
+// in the docs as a *fixed* value rather than a per-type enum, suggesting
+// it may be shared across the whole manager - but this is a best-effort
+// assumption for every type except Android. Raw JSON is returned
+// unparsed rather than guessing at a Go struct for an unconfirmed shape.
+
+// GetAppDeployStatus returns the most recent app-deployment status
+// record(s) for a device from the shared Android/Linux/Windows/Docker
+// "appstatusmgr" manager. See the OTA deploy status section note above -
+// only confirmed for Android.
+func (c *Client) GetAppDeployStatus(agentID string) (json.RawMessage, error) {
+	q := url.Values{}
+	q.Set("endpoint", agentID)
+	q.Set("type", "sg")
+	var raw json.RawMessage
+	if err := c.do(http.MethodGet, "/api/appstatusmgr/bydevid?"+q.Encode(), nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// GetFileDeployStatus returns the most recent generic-file deployment
+// status record(s) for a device and repo file --type category. See the
+// OTA deploy status section note above.
+func (c *Client) GetFileDeployStatus(agentID, fileType string) (json.RawMessage, error) {
+	q := url.Values{}
+	q.Set("endpoint", agentID)
+	q.Set("type", fileType)
+	var raw json.RawMessage
+	if err := c.do(http.MethodGet, "/api/filestatusmgr/bydevid?"+q.Encode(), nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// GetBSPUpdateStatus returns BSP/system-update deployment status
+// record(s) for a device. Unlike GetAppDeployStatus/GetFileDeployStatus,
+// this endpoint takes no "type" parameter at all - BSP updates are their
+// own single business domain, not shared across package types, so there's
+// no type-guessing risk here.
+func (c *Client) GetBSPUpdateStatus(agentID string) (json.RawMessage, error) {
+	q := url.Values{}
+	q.Set("endpoint", agentID)
+	var raw json.RawMessage
+	if err := c.do(http.MethodGet, "/api/deploymgr/bydevid?"+q.Encode(), nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // devicecontrol object/resource path used for reboot, shutdown, and (best
 // effort, undocumented in AppHub-v2.3.0.md) volume/backlight control. See
 // DeviceLink's PluginsServlet#put_4_writevalue and the "send command"/
