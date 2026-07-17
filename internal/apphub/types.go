@@ -494,7 +494,7 @@ var settableThresholdMetrics = map[string]bool{
 // this was tested against (only the empty-list case is confirmed).
 type MonitoredProcess struct {
 	Command     string         `json:"command"`
-	PID         string         `json:"pid"`
+	PID         FlexibleNumber `json:"pid"`
 	CPUPercent  FlexibleNumber `json:"cpu_percent"`
 	MemPercent  FlexibleNumber `json:"mem_percent"`
 	Status      string         `json:"status"`
@@ -504,7 +504,7 @@ type MonitoredProcess struct {
 
 type rawMonitoredProcess struct {
 	ThreadCmd        string         `json:"threadcmd"`
-	ThreadPid        string         `json:"threadpid"`
+	ThreadPid        FlexibleNumber `json:"threadpid"`
 	ThreadCPULoading FlexibleNumber `json:"threadcpuloading"`
 	ThreadMemLoading FlexibleNumber `json:"threadmemloading"`
 	ThreadStatus     string         `json:"threadstatus"`
@@ -573,18 +573,21 @@ type operationRecordsPageResponse struct {
 
 // SystemLogEntry is one row from a device's collected system log (fed by
 // SetSystemLogMonitorEnabled turning collection on for that device).
+// Level and Pid are FlexibleNumber (not plain strings) because the server
+// reports them as numeric strings (e.g. "level":"5", "pid":"16662") -
+// confirmed against a live server via a real packet capture.
 type SystemLogEntry struct {
-	ID       int64  `json:"id"`
-	DeviceID string `json:"deviceId"`
-	DevName  string `json:"devname"`
-	Content  string `json:"content"`
-	OS       string `json:"os"`
-	Level    string `json:"level"`
-	Mode     string `json:"mode"`
-	Name     string `json:"name"`
-	Pid      string `json:"pid"`
-	EventID  string `json:"eventId"`
-	Ts       int64  `json:"ts"`
+	ID       int64          `json:"id"`
+	DeviceID string         `json:"deviceId"`
+	DevName  string         `json:"devname"`
+	Content  string         `json:"content"`
+	OS       string         `json:"os"`
+	Level    FlexibleNumber `json:"level"`
+	Mode     string         `json:"mode"`
+	Name     string         `json:"name"`
+	Pid      FlexibleNumber `json:"pid"`
+	EventID  string         `json:"eventId"`
+	Ts       int64          `json:"ts"`
 }
 
 // systemLogsPageResponse mirrors /api/systemLog/byPage's actual response:

@@ -125,7 +125,7 @@ Example 示例: eim-skill ota linux list
 Example output 输出示例 (empty when the repo has no Linux packages
 uploaded yet 仓库尚未上传任何 Linux 包时返回空数组):
   {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -164,7 +164,7 @@ Example output 输出示例 (real 真实返回):
       }
     ]
   }`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -194,7 +194,7 @@ was last made against it).
 失败，对应最近一次对它调用 "apply"/"apply-group" 的结果）。
 
 Example 示例: eim-skill ota linux status "146打包机"` + appDeployStatusLongNote,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -242,7 +242,7 @@ version must exactly match an entry from "ota linux list".
 Example 示例: eim-skill ota linux apply "146打包机" AppHub-Edge 3.0.5
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../AppHub-Edge_3.0.5.tar.gz"}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -287,7 +287,7 @@ group that also carry that label.
 Example 示例: eim-skill ota linux apply-group default AppHub-Edge 3.0.5
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../AppHub-Edge_3.0.5.tar.gz"}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -351,7 +351,7 @@ Example 示例: eim-skill ota android list
 
 Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
 APK 时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -378,7 +378,7 @@ var otaAndroidInstalledCmd = &cobra.Command{
 列出 Android 设备上当前已安装的应用。
 
 Example 示例: eim-skill ota android installed "<android-device>"`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -417,7 +417,7 @@ ground than its Linux/Windows/Docker siblings.
 status 命令比 Linux/Windows/Docker 的对应命令更有把握。
 
 Example 示例: eim-skill ota android status "<android-device>"`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -465,7 +465,7 @@ an entry from "ota android list".
 版本号完全一致。
 
 Example 示例: eim-skill ota android apply "<android-device>" com.example.app 1.2.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -508,7 +508,7 @@ group that also carry that label.
 用来只对组内带有该标签的设备生效。
 
 Example 示例: eim-skill ota android apply-group default com.example.app 1.2.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -547,7 +547,7 @@ var otaAndroidUninstallCmd = &cobra.Command{
 Example 示例: eim-skill ota android uninstall "<android-device>" com.example.app
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -605,7 +605,7 @@ Example 示例: eim-skill ota windows-exe list
 
 Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
 exe 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -632,7 +632,7 @@ var otaWindowsExeInstalledCmd = &cobra.Command{
 列出 Windows 设备上当前已安装的 exe 软件包。
 
 Example 示例: eim-skill ota windows-exe installed "<windows-device>"`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -662,7 +662,7 @@ call was last made against it).
 成功/失败，对应最近一次对它调用 "install"/"upgrade" 的结果）。
 
 Example 示例: eim-skill ota windows-exe status "<windows-device>"` + appDeployStatusLongNote,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -712,7 +712,7 @@ exactly match an entry from "ota windows-exe list"; the packaging tool
 Example 示例: eim-skill ota windows-exe install "<windows-device>" MyApp 1.0.0
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../MyApp-1.0.0.exe", "tool": "Inno Setup"}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeSingle(args[0], args[1], args[2], false)
 	},
@@ -728,7 +728,7 @@ project-name/version (must exist in "ota windows-exe list").
 version（必须存在于 "ota windows-exe list" 返回结果里）。
 
 Example 示例: eim-skill ota windows-exe upgrade "<windows-device>" MyApp 1.1.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeSingle(args[0], args[1], args[2], true)
 	},
@@ -767,7 +767,7 @@ var otaWindowsExeInstallGroupCmd = &cobra.Command{
 一次性在整个设备组下的所有 Windows 设备上安装 exe 软件包。
 
 Example 示例: eim-skill ota windows-exe install-group win-group MyApp 1.0.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeGroup(args[0], args[1], args[2], false)
 	},
@@ -783,7 +783,7 @@ a single call.
 版本。
 
 Example 示例: eim-skill ota windows-exe upgrade-group win-group MyApp 1.1.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return applyWindowsExeGroup(args[0], args[1], args[2], true)
 	},
@@ -845,7 +845,7 @@ Example 示例: eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0
        eim-skill ota windows-exe uninstall "<windows-device>" MyApp 1.0.0 --tool "WiX Toolset"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tool, _ := cmd.Flags().GetString("tool")
 		client, err := newClient()
@@ -907,7 +907,7 @@ Example 示例: eim-skill ota windows-zip list
 
 Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
 zip 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -934,7 +934,7 @@ var otaWindowsZipInstalledCmd = &cobra.Command{
 列出 Windows 设备上当前已安装的 zip 软件包。
 
 Example 示例: eim-skill ota windows-zip installed "<windows-device>"`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -964,7 +964,7 @@ call was last made against it).
 成功/失败，对应最近一次对它调用 "install"/"update" 的结果）。
 
 Example 示例: eim-skill ota windows-zip status "<windows-device>"` + appDeployStatusLongNote,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -995,7 +995,7 @@ optional (arguments passed to the extracted package once run).
 可选，是解压后运行程序时传入的参数。
 
 Example 示例: eim-skill ota windows-zip install "<windows-device>" MyTool 2.0.0 --parameter "--silent"`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		return applyWindowsZipSingle(args[0], args[1], args[2], parameter, false)
@@ -1012,7 +1012,7 @@ project-name/version (must exist in "ota windows-zip list").
 version（必须存在于 "ota windows-zip list" 返回结果里）。
 
 Example 示例: eim-skill ota windows-zip update "<windows-device>" MyTool 2.1.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		return applyWindowsZipSingle(args[0], args[1], args[2], parameter, true)
@@ -1065,7 +1065,7 @@ carry that label.
 可选，用来只对组内带有该标签的设备生效。
 
 Example 示例: eim-skill ota windows-zip install-group win-group MyTool 2.0.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		label, _ := cmd.Flags().GetString("label")
@@ -1084,7 +1084,7 @@ group that also carry that label.
 版本。--label 可选，用来只对组内带有该标签的设备生效。
 
 Example 示例: eim-skill ota windows-zip update-group win-group MyTool 2.1.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parameter, _ := cmd.Flags().GetString("parameter")
 		label, _ := cmd.Flags().GetString("label")
@@ -1133,7 +1133,7 @@ var otaWindowsZipUninstallCmd = &cobra.Command{
 Example 示例: eim-skill ota windows-zip uninstall "<windows-device>" MyTool 2.0.0
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -1193,7 +1193,7 @@ Example 示例: eim-skill ota docker list
 
 Example output 输出示例 (empty when none uploaded 仓库尚未上传任何
 Docker 包时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -1229,7 +1229,7 @@ deployed container, so it's not a full substitute.
 所以不能完全替代这里的查询。
 
 Example 示例: eim-skill ota docker status "146打包机"` + appDeployStatusLongNote,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -1275,7 +1275,7 @@ and version must exactly match an entry from "ota docker list".
 必须和 "ota docker list" 返回结果里的值完全一致。
 
 Example 示例: eim-skill ota docker apply "146打包机" myapp-stack 1.0.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -1318,7 +1318,7 @@ devices in the group that also carry that label.
 编排包。--label 可选，用来只对组内带有该标签的设备生效。
 
 Example 示例: eim-skill ota docker apply-group default myapp-stack 1.0.0`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -1357,7 +1357,7 @@ var otaDockerUninstallCmd = &cobra.Command{
 Example 示例: eim-skill ota docker uninstall "146打包机" myapp-stack 1.0.0
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784..."}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -1426,7 +1426,7 @@ Example 示例: eim-skill ota file list --type deploy
 
 Example output 输出示例 (empty when nothing uploaded under that type
 该分类下尚未上传任何文件时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		client, err := newClient()
@@ -1469,7 +1469,7 @@ not be confirmed against real data.
 （fileDeployApi.js）找到，已确认对真实服务器请求能成功返回，但该
 服务器当时没有任何文件部署任务历史记录，因此无法验证有数据时的
 实际返回结构。`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		client, err := newClient()
@@ -1513,7 +1513,7 @@ it executable and runs it after deployment.
 Example 示例: eim-skill ota file deploy "146打包机" report.pdf /home/user/report.pdf --type deploy
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "taskname": "ota-1784...", "downloadpath": "http://.../report.pdf"}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		isExec, _ := cmd.Flags().GetBool("exec")
@@ -1559,7 +1559,7 @@ to devices in the group that also carry that label.
 "deploy" 相同。--label 可选，用来只对组内带有该标签的设备生效。
 
 Example 示例: eim-skill ota file deploy-group default report.pdf /home/user/report.pdf --type deploy`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fileType, _ := cmd.Flags().GetString("type")
 		isExec, _ := cmd.Flags().GetBool("exec")
@@ -1640,7 +1640,7 @@ a populated response.
 windows-exe/windows-zip/docker）不同，这个接口完全不需要 "type"
 业务分类参数，所以不存在猜测取值的问题——唯一的不确定性只是"有数据
 时具体长什么样"。`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {

@@ -1,6 +1,6 @@
 ---
 name: device-monitoring
-description: Read and configure a DeviceOn-EIM device's monitoring and alerting - a live CPU/memory/storage/battery/network snapshot, CPU/memory/storage/network/battery thresholds, application/process monitoring, Docker container monitoring, USB storage device access, and historical CPU/memory samples. Use this whenever the user asks about a device's resource usage, alert thresholds, or wants to turn monitoring of some subsystem on/off via the eim-skill CLI. 中文触发词：设备监控、监控详情、CPU监控、内存监控、存储监控、网络监控、告警阈值、阈值设置、进程监控、应用监控、Docker监控、容器监控、USB存储设备、U盘。
+description: Read and configure a DeviceOn-EIM device's monitoring and alerting - a live CPU/memory/storage/battery/network snapshot, CPU/memory/storage/network/battery thresholds, application/process monitoring, Docker container monitoring, USB peripheral change monitoring, and historical CPU/memory samples. Use this whenever the user asks about a device's resource usage, alert thresholds, or wants to turn monitoring of some subsystem on/off via the eim-skill CLI. 中文触发词：设备监控、监控详情、CPU监控、内存监控、存储监控、网络监控、告警阈值、阈值设置、进程监控、应用监控、Docker监控、容器监控、USB外设监控。
 ---
 
 # Device monitoring and alerting
@@ -18,7 +18,7 @@ configured (see repo README).
 - "Alert me if CPU usage on device X goes above 90%" / "设置设备X的CPU使用率告警阈值" → `device threshold set`
 - "Which processes are currently being monitored on device X?" / "查看设备X正在监控的进程" → `device process monitored`
 - "Which Docker containers on device X are being monitored?" / "查看设备X正在监控的Docker容器" → `device docker monitored`
-- "Allow/block USB storage devices on device X" / "允许/禁止设备X使用U盘" → `device usb set-monitor`
+- "Turn on USB-change alerts for device X" / "开启设备X的USB外设变更告警" → `device usb set-monitor`
 - "Show me CPU/memory history for device X" / "查看设备X的CPU/内存历史监控数据" → `device monitor --type cpu|memory`
 
 ## Commands
@@ -35,8 +35,8 @@ eim-skill device process monitored <endpoint-or-name>
 
 eim-skill device docker monitored <endpoint-or-name>
 
-eim-skill device usb get-monitor <endpoint-or-name>                      # is USB storage device access enabled?
-eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB storage device access on/off
+eim-skill device usb get-monitor <endpoint-or-name>                      # is USB change-alerting on?
+eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB change-alerting on/off
 
 eim-skill device monitor <endpoint-or-name> --type cpu|memory [--last <30m|12h|3d>]
 ```
@@ -55,9 +55,11 @@ list, same as in the device-management skill.
   free+usage each summed to 100), not from a spec.
 - `device process monitored` is also undocumented (the `get_monitor_app`
   action) and normalized the same way - `cpu_percent`/`mem_percent` are
-  real numbers, `is_monitored` a real boolean. Its per-item shape is
-  inferred by analogy with the sibling `get_software_info` action (same
-  subsystem), not verified against a populated list.
+  real numbers, `is_monitored` a real boolean, `pid` a real number (the
+  agent reports it as a numeric string, e.g. `"pid":"639"` - confirmed
+  against a live server). Its per-item shape is inferred by analogy with
+  the sibling `get_software_info` action (same subsystem), not verified
+  against a populated list.
 - `device docker monitored` returns only the Docker containers currently
   selected for monitoring (`ismonitor == true`), not every deployed
   container - it's the Docker analogue of `device process monitored`.
@@ -68,20 +70,21 @@ list, same as in the device-management skill.
   resource (`.../60001/0/27300`) assuming a response grouped by compose
   project, which returned an empty result on a live server with real
   containers deployed - fixed via the packet capture.
-- `device usb get-monitor`/`set-monitor` control whether USB storage
-  devices (e.g. a USB flash drive) can be used - not USB
-  connect/disconnect alerting, as an earlier version assumed. Uses
-  `get_usb_storage_status`/`set_usb_storage_status` (confirmed against a
-  live server via a real packet capture); `set-monitor` was additionally
-  cross-checked in `log operations list`'s audit trail, where it's logged
-  under the friendly event names `enableUsb`/`disableUsb` (most actions
-  are logged as raw JSON instead) - confirming the server specially
-  recognizes it as a real action. An earlier version used
-  `get_usb_change`/`set_peripheral_monitor` instead; the latter was
-  logged as raw unrecognized JSON in the same audit trail, a strong
-  signal it wasn't a real action, so it was replaced. Some devices return
-  an empty result for `get_usb_storage_status` rather than a definite
-  value; this is normalized to `enabled: false`.
+- `device usb get-monitor`/`set-monitor` control USB peripheral
+  change-alerting (alert on connect/disconnect), using `get_usb_change`/
+  `set_peripheral_monitor` - confirmed against a live server via a real
+  packet capture and cross-verified by toggling `set-monitor` true/false
+  and observing `get-monitor` correctly reflects each change. (A brief
+  earlier version swapped in `get_usb_storage_status`/
+  `set_usb_storage_status` instead - a different, separate feature, USB
+  mass-storage access, based on a packet capture that turned out to be
+  for that other feature. Its SET call succeeded and was logged under a
+  friendly audit-log event name, which looked like good evidence, but its
+  GET side never reflected the change on a live device tested, so it was
+  reverted - a GET that actually reflects the SET is stronger evidence of
+  a real toggle than an audit-log label.) USB mass-storage access itself
+  isn't currently exposed as a command, since its GET side couldn't be
+  confirmed working.
 - CPU/memory/storage/network/battery are monitored via configurable
   warn/error *thresholds*, not a live value feed. Pair `device threshold
   get` (current config) with `device monitor --type cpu|memory`

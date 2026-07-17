@@ -74,8 +74,15 @@ func printErrorResult(err error) {
 }
 
 func printEnvelope(r result) {
-	data, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// json.Marshal/MarshalIndent HTML-escape "<", ">", and "&" by default
+	// (meant for embedding JSON in HTML - not relevant here, and it mangles
+	// legitimate output like a usage string containing "<endpoint-or-name>"
+	// into "<endpoint-or-name>"). Encoder lets us turn that off.
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(r); err != nil {
 		// Marshaling our own envelope failed (e.g. a NaN float somewhere in
 		// Data) - write a hand-built fallback rather than exiting the
 		// process, since this now also runs inside the long-running MCP
@@ -84,5 +91,5 @@ func printEnvelope(r result) {
 		fmt.Fprintf(out, "{\"status\":%d,\"msg\":%q}\n", statusError, "failed to render output: "+err.Error())
 		return
 	}
-	fmt.Fprintln(out, string(data))
+	fmt.Fprint(out, buf.String())
 }

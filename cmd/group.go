@@ -30,7 +30,7 @@ Example output 输出示例 (real 真实返回):
       }
     ]
   }`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -64,7 +64,7 @@ Example output 输出示例 (real 真实返回):
       {"name": "default", "type": "mix", "total": 6, "online": 1, "warning": 0, "error": 0}
     ]
   }`,
-	Args: cobra.MaximumNArgs(1),
+	Args: requireArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -105,7 +105,7 @@ enforced enum) - "mix" allows devices of any OS. description is optional.
 Example 示例: eim-skill group create edge-line-1 mix "产线1边缘设备"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.RangeArgs(2, 3),
+	Args: requireArgs(cobra.RangeArgs(2, 3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, groupType := args[0], args[1]
 		desc := ""

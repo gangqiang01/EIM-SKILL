@@ -161,7 +161,7 @@ Example 示例: eim-skill device counts
 
 Example output 输出示例:
   {"status": 200, "msg": "", "data": {"online": 1, "offline": 5}}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -189,7 +189,7 @@ Example 示例: eim-skill device health
 
 Example output 输出示例:
   {"status": 200, "msg": "", "data": {"normal": 1, "warning": 0, "error": 0}}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -229,7 +229,7 @@ Example output 输出示例 (trimmed 已截断):
       "deviceStatusText": "normal"
     }
   }`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -261,8 +261,17 @@ returns the full device record - online status, group membership, etc).
 在线状态、分组等），这个命令更轻量，只关注硬件本身。
 
 Not documented in AppHub-v2.3.0.md (found in ClientServlet's
-get_1_details). 未在 AppHub-v2.3.0.md 中记录，是从 ClientServlet 的
-get_1_details 接口反推得到。
+get_1_details). Mostly passed through as-is (its shape varies by device
+OS), except "memorysize" and each storage entry's "total" - the agent
+reports these as numeric strings (e.g. "memorysize":"7.64") on both
+Linux and Windows devices, confirmed against a live server, so this CLI
+converts them to real JSON numbers.
+
+未在 AppHub-v2.3.0.md 中记录，是从 ClientServlet 的 get_1_details 接口
+反推得到。这个信息块大部分原样透传（不同设备操作系统的结构不完全
+一致），只有 "memorysize" 和每个存储条目的 "total" 例外——已在
+Linux 和 Windows 设备上用真实服务器验证过，agent 上报的是数字字符串
+（如 "memorysize":"7.64"），本CLI会把它们转换成真正的JSON数字。
 
 Example 示例: eim-skill device details "08:00:27:33:EC:2E"
 
@@ -274,10 +283,11 @@ Example output 输出示例 (trimmed 已截断):
       "cores": 2,
       "arch": "amd64",
       "board_name": "VirtualBox",
-      "agentversion": "3.0.5"
+      "agentversion": "3.0.5",
+      "memorysize": 7.64
     }
   }`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -311,7 +321,7 @@ agent 仍在运行并再次上线签到，通常会重新注册出现。
 Example 示例: eim-skill device delete "08:00:27:33:EC:2E"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -368,7 +378,7 @@ a plain number and failed to decode servers that report it as a string).
 每个采样点的 "value" 采用宽松解析：有的服务器返回的是 JSON 数字，有的
 返回的是数字字符串——这里统一归一化成普通数字（此前版本假设一定是
 数字，遇到返回字符串的服务器会解码失败，已根据真实反馈修复）。`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataType, _ := cmd.Flags().GetString("type")
 		last, _ := cmd.Flags().GetString("last")
@@ -411,7 +421,7 @@ Example 示例: eim-skill device add-to-group "08:00:27:33:EC:2E" default
 
 Example output 输出示例:
   {"status": 200, "msg": "", "data": {"status": "CHANGED", "groups": ["default"]}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -446,7 +456,7 @@ AppHub-v2.3.0.md ("PUT reboot-设备立即重启").
 Example 示例: eim-skill device reboot "146打包机"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -475,7 +485,7 @@ var deviceShutdownCmd = &cobra.Command{
 Example 示例: eim-skill device shutdown "146打包机"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -517,7 +527,7 @@ real hardware).
 Example 示例: eim-skill device get-volume "146打包机"
 
 Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"volume": 50}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -554,7 +564,7 @@ success without actually changing anything - fixed via a real bug report).
 Example 示例: eim-skill device set-volume "146打包机" 50
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		volume, err := strconv.Atoi(args[1])
 		if err != nil {
@@ -604,7 +614,7 @@ applying it to real hardware).
 Example 示例: eim-skill device get-backlight "146打包机"
 
 Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"brightness": 77}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -642,7 +652,7 @@ fixed via a real bug report).
 Example 示例: eim-skill device set-backlight "146打包机" 80
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		brightness, err := strconv.Atoi(args[1])
 		if err != nil {
@@ -704,7 +714,7 @@ PUT /api/plugins/batch/{groupname}/40008/0/27601，但经真实用户反馈、
 Example 示例: eim-skill device reboot-group default --label edge-line-1
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -736,7 +746,7 @@ batchExec 而不是文档里那个看起来更简单、URL里直接带组名的�
 Example 示例: eim-skill device shutdown-group default
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		label, _ := cmd.Flags().GetString("label")
 		client, err := newClient()
@@ -768,7 +778,7 @@ its help for the fixed-action-key note.
 Example 示例: eim-skill device set-volume-group default 50
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		volume, err := strconv.Atoi(args[1])
 		if err != nil {
@@ -808,7 +818,7 @@ group-name（和可选的 --label）的方式与 "device reboot-group" 相同
 Example 示例: eim-skill device set-backlight-group default 80
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		brightness, err := strconv.Atoi(args[1])
 		if err != nil {

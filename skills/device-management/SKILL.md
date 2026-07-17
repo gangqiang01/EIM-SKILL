@@ -128,7 +128,11 @@ every device-targeting command resolves it against the live device list.
 - `device details` is also undocumented (found in `ClientServlet`'s
   `get_1_details`) - it's a lighter-weight call than `device get` when you
   only need the system-info blob, not the full device record (online
-  status, group membership, etc).
+  status, group membership, etc). Its shape varies by device OS and is
+  mostly passed through as-is, except `memorysize` and each storage
+  entry's `total` - the agent reports these as numeric strings (e.g.
+  `"memorysize":"7.64"`) on both Linux and Windows devices, confirmed
+  against a live server, so this CLI converts them to real JSON numbers.
 - Every command prints one JSON object to stdout:
   `{"status":200,"msg":"","data":...}` or `{"status":500,"msg":"..."}`, with
   exit code 0/1 to match - safe to script against.

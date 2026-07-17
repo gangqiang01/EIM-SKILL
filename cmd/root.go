@@ -90,6 +90,21 @@ func Execute() int {
 	return 0
 }
 
+// requireArgs wraps a cobra positional-arg validator (ExactArgs,
+// MaximumNArgs, RangeArgs, NoArgs, etc) so a mismatch reports the
+// command's usage line (e.g. "Usage: eim-skill device reboot
+// <endpoint-or-name>") instead of cobra's bare default message ("accepts
+// 1 arg(s), received 0"), which doesn't say what's actually missing or
+// expected - confirmed confusing via a real bug report.
+func requireArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := validate(cmd, args); err != nil {
+			return fmt.Errorf("%s\nUsage: %s", err, cmd.UseLine())
+		}
+		return nil
+	}
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "conf/config.yaml", "config file path (配置文件路径)")
 	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "DeviceOn-EIM server base URL (overrides config file, e.g. http://127.0.0.1:30010) - 服务器地址（覆盖配置文件）")

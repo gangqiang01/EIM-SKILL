@@ -299,7 +299,48 @@ func (c *Client) GetDeviceDetails(deviceID string) (json.RawMessage, error) {
 	if len(resp.Details) == 0 {
 		return nil, nil
 	}
-	return json.RawMessage(resp.Details), nil
+	return normalizeDeviceDetailsNumbers(json.RawMessage(resp.Details)), nil
+}
+
+// normalizeDeviceDetailsNumbers converts known numeric-string fields in the
+// device details blob ("memorysize", and each storage entry's "total") into
+// real JSON numbers - confirmed against a live server (both Linux and
+// Windows devices) that these are always numeric strings (e.g.
+// "memorysize":"7.64") rather than JSON numbers, unlike most other fields
+// in this blob. The rest of the (loosely-typed, OS-varying) blob is passed
+// through unchanged; if it doesn't parse as a JSON object for any reason,
+// the original raw bytes are returned as-is rather than failing the whole
+// response over a cosmetic normalization.
+func normalizeDeviceDetailsNumbers(raw json.RawMessage) json.RawMessage {
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+
+	if s, ok := m["memorysize"].(string); ok {
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			m["memorysize"] = f
+		}
+	}
+	if storage, ok := m["storage"].([]interface{}); ok {
+		for _, entry := range storage {
+			disk, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if s, ok := disk["total"].(string); ok {
+				if f, err := strconv.ParseFloat(s, 64); err == nil {
+					disk["total"] = f
+				}
+			}
+		}
+	}
+
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // DeleteDevice removes a device from the server.
@@ -1272,16 +1313,17 @@ func (c *Client) GetDockerInfo(agentID string) ([]DockerContainer, error) {
 	return monitored, nil
 }
 
-// GetUSBMonitorEnabled reports whether USB storage device access is
-// currently enabled on the device. Confirmed against a live server via a
-// real packet capture; the response may be an empty object on devices
-// that don't report current status, in which case this returns false.
+// GetUSBMonitorEnabled reports whether USB peripheral change monitoring
+// (alerting on USB connect/disconnect) is enabled. Confirmed against a
+// live server via a real packet capture, and cross-verified by toggling
+// SetUSBMonitorEnabled true/false and observing this correctly reflects
+// each change.
 func (c *Client) GetUSBMonitorEnabled(agentID string) (bool, error) {
-	raw, err := c.getPluginAction(agentID, `{'get_usb_storage_status':true}`)
+	raw, err := c.getPluginAction(agentID, `{'get_usb_change':true}`)
 	if err != nil {
 		return false, err
 	}
-	if raw == "" || raw == "{}" {
+	if raw == "" {
 		return false, nil
 	}
 
@@ -1289,23 +1331,30 @@ func (c *Client) GetUSBMonitorEnabled(agentID string) (bool, error) {
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return false, fmt.Errorf("DeviceOn-EIM: decode usb monitor status: %w", err)
 	}
-	return m["get_usb_storage_status"] == "true", nil
+	return m["get_usb_change"] == "true", nil
 }
 
-// SetUSBMonitorEnabled enables or disables USB storage device access on
-// the device. Confirmed against a live server via a real packet capture -
-// the server logs this action under the friendly audit-log event names
-// "enableUsb"/"disableUsb" (unlike most actions, which are logged as raw
-// JSON), confirming it's a recognized, meaningful action rather than an
-// inert passthrough.
+// SetUSBMonitorEnabled turns USB peripheral change monitoring on or off.
+// Confirmed against a live server via a real packet capture, and
+// cross-verified against GetUSBMonitorEnabled: toggling this true/false
+// and re-reading GetUSBMonitorEnabled correctly reflects each change.
 //
-// NOTE: an earlier version instead sent "set_peripheral_monitor"/
-// "usb_change" (based on an incorrect assumption that this was a USB
-// connect/disconnect alert toggle) - that action was logged as raw JSON
-// in the audit trail rather than a friendly event name, suggesting the
-// server didn't specially recognize it either.
+// NOTE: an earlier version of this client briefly used
+// "set_usb_storage_status" instead (a different, separate feature - USB
+// mass-storage access - based on a packet capture that turned out to be
+// for that other feature, not this one). That action's SET call
+// succeeded and was logged under a friendly audit-log event name
+// ("enableUsb"/"disableUsb"), which seemed like strong evidence at the
+// time, but its GET side ("get_usb_storage_status") never reflected the
+// change (always returned an empty result) - unlike get_usb_change here,
+// which reliably reflects set_peripheral_monitor. A GET that actually
+// reflects the SET is stronger evidence of a real, working toggle than
+// an audit-log label, so this was reverted back to
+// set_peripheral_monitor/get_usb_change.
 func (c *Client) SetUSBMonitorEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{"set_usb_storage_status": enabled})
+	return c.execAction(agentID, map[string]interface{}{
+		"set_peripheral_monitor": []map[string]interface{}{{"usb_change": enabled}},
+	})
 }
 
 // SetSystemLogMonitorEnabled turns systemd log collection/reporting on or

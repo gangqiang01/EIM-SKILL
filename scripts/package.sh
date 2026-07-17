@@ -39,7 +39,7 @@ cp "${binaries[@]}" "${STAGE_DIR}/"
 # (which may hold a live internal server address/credentials) - the
 # recipient copies this to config.yaml and fills in their own values.
 mkdir -p "${STAGE_DIR}/conf"
-cp conf/config.yaml.example "${STAGE_DIR}/conf/"
+cp conf/config.yaml "${STAGE_DIR}/conf/"
 
 tar -czf "${PKG_NAME}.tar.gz" -C "${DIST_DIR}" "${PKG_NAME}"
 rm -rf "${STAGE_DIR}"

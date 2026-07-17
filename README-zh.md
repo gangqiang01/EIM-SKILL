@@ -98,6 +98,10 @@ DeviceOn-EIM-v2.3.0.md 中记录；使用和重启/关机相同的设备控制�
 `device details` 同样未文档化（源自 `ClientServlet` 的 `get_1_details`
 接口）；当你只需要agent上报的系统硬件信息（CPU、内存、存储、网卡）而
 不是完整设备记录（在线状态、分组等）时，这个命令比 `device get` 更轻量。
+这个信息块的结构因设备操作系统而异，大部分原样透传，只有 `memorysize`
+和每个存储条目的 `total` 例外——已在 Linux 和 Windows 设备上用真实
+服务器验证过，agent 上报的是数字字符串（如 `"memorysize":"7.64"`），
+本CLI会把它们转换成真正的JSON数字。
 
 `device counts`/`device health`/`group status` 虽然在 DeviceOn-EIM-v2.3.0.md
 中有记录，但服务器返回的是扁平的 `[{"name":...,"value":...}]` 数组格式
@@ -156,17 +160,19 @@ CPU、内存、存储、网络是通过可配置的警告/错误阈值（`device
 设备控制动作（已通过真实抓包确认），并在客户端过滤出被监控的子集，
 与 `device process monitored` 的形态/用途保持一致。
 
-`device usb get-monitor`/`set-monitor` 控制的是设备是否允许使用
-USB存储设备（如U盘），而不是早期版本以为的"USB插拔告警"。使用的是
-`get_usb_storage_status`/`set_usb_storage_status` 设备控制动作，已通过
-真实抓包在真实服务器上验证过；`set-monitor` 还在 `log operations
-list` 的审计记录里做了交叉核实——这个动作会被记录为友好的事件名
-`enableUsb`/`disableUsb`（大多数动作只会被记录成原始JSON），说明服务器
-确实识别并处理了这个动作。早期版本用的是 `get_usb_change`/
-`set_peripheral_monitor`（USB插拔告警），其中 `set_peripheral_monitor`
-在同一份审计记录里只留下了未被识别的原始JSON，这也是它并非真实动作的
-一个有力信号，因此已替换。部分设备对 `get_usb_storage_status` 会返回
-空结果而不是一个确切的值，本CLI会将其归一化为 `enabled: false`。
+`device usb get-monitor`/`set-monitor` 控制的是USB外设变更告警是否
+开启（设备插拔时触发提醒）。使用的是 `get_usb_change`/
+`set_peripheral_monitor` 设备控制动作，已通过真实抓包在真实服务器上
+验证过，并交替切换 `set-monitor` 的 true/false 后查询 `get-monitor`
+做了交叉验证，能正确反映每次变化。（本CLI早期有一个短暂版本改用了
+`get_usb_storage_status`/`set_usb_storage_status`，起因是一份实际
+对应另一个独立功能——USB存储访问权限，而非这个功能——的抓包；那个
+动作的SET调用会成功，并且会被记录为一个友好的审计事件名，当时看起来
+是很有力的证据，但在真实设备上测试时，它的GET一侧从未反映过变化，
+因此已恢复。GET能真正反映SET的效果，比审计日志里的事件名更能说明
+这是一个真实生效的开关。）USB存储设备访问权限本身
+（`get_usb_storage_status`/`set_usb_storage_status`）目前没有做成
+命令，因为它的GET一侧没能验证成功。
 
 `device monitor` 返回的 `value` 是所选 `--type` 对应的使用率百分比
 （0-100）——`--type cpu` 时是CPU使用率，`--type memory` 时是内存使用率
@@ -186,10 +192,12 @@ agent数据里数字、数字字符串、`"N/A"` 占位符混杂不一致，本C
 `device process monitored` 同样未文档化（`get_monitor_app` 设备控制
 接口，用相同方式发现），归一化方式相似——`threadcpuloading`/
 `threadmemloading` 转换成数字 `cpu_percent`/`mem_percent`，
-`threadismonitor` 转换成真正的布尔值 `is_monitored`。其单条记录的字段
-结构是参照同一子系统的 `get_software_info` 接口类比推断的，并未在有
-数据的真实场景下验证过——详见 `internal/DeviceOn-EIM/types.go` 里
-`MonitoredProcess` 的注释。
+`threadismonitor` 转换成真正的布尔值 `is_monitored`，`pid` 也转换成
+真正的数字（agent 返回的是数字字符串，如 `"pid":"639"`——已用真实
+服务器验证过）。其单条记录的字段结构是参照同一子系统的
+`get_software_info` 接口类比推断的，并未在有数据的真实场景下验证
+过——详见 `internal/DeviceOn-EIM/types.go` 里 `MonitoredProcess` 的
+注释。
 
 
 ### 日志与操作记录
@@ -231,7 +239,9 @@ DeviceOn-EIM-v2.3.0.md 中记录——通过真实抓包反推得到，确认接
 `/api/systemLog/byPage`（大写 `P`）。本CLI早期版本用的是小写的
 `/api/systemLog/bypage`，会被服务器返回 HTTP 400 "Invalid path"
 错误——这是客户端自身的bug，并非服务器本身的限制，此前曾因这个错误的
-结论把整组命令都移除了，现已找到问题并修正、恢复。
+结论把整组命令都移除了，现已找到问题并修正、恢复。`level` 和 `pid`
+已归一化成真正的JSON数字——服务器返回的是数字字符串（如
+`"level":"4"`），已用真实服务器验证过。
 
 ### OTA 部署
 

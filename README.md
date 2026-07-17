@@ -111,7 +111,11 @@ commands now resolve the group to specific devices first instead.
 `get_1_details`); it's a lighter-weight call than `device get` when you
 only need the agent-reported system info blob (cpu, memory, storage,
 network interfaces) rather than the full device record (online status,
-group membership, etc).
+group membership, etc). Its shape varies by device OS and is mostly
+passed through as-is, except `memorysize` and each storage entry's
+`total` - the agent reports these as numeric strings (e.g.
+`"memorysize":"7.64"`) on both Linux and Windows devices, confirmed
+against a live server, so this CLI converts them to real JSON numbers.
 
 `device counts`/`device health`/`group status` are documented in
 DeviceOn-EIM-v2.3.0.md but return a flat `[{"name":...,"value":...}]` array
@@ -174,21 +178,23 @@ devicecontrol `get_docker_info` action (confirmed via a real packet
 capture) and filtered to the monitored subset client-side, matching
 `device process monitored`'s shape/intent.
 
-`device usb get-monitor`/`set-monitor` control whether USB storage
-devices (e.g. a USB flash drive) can be used on the device - not USB
-connect/disconnect alerting, as an earlier version assumed. They use the
-`get_usb_storage_status`/`set_usb_storage_status` devicecontrol actions,
-confirmed against a live server via a real packet capture; `set-monitor`
-was additionally cross-checked in `log operations list`'s audit trail,
-where it's logged under the friendly event names `enableUsb`/
-`disableUsb` (most actions are logged as raw JSON instead), confirming
-the server specially recognizes it as a real, meaningful action. An
-earlier version instead used `get_usb_change`/`set_peripheral_monitor`
-(alert on USB connect/disconnect) - that `set_peripheral_monitor` calls
-were logged as raw unrecognized JSON in the same audit trail was a strong
-signal it wasn't a real action either, so it was replaced. Some devices
-return an empty result for `get_usb_storage_status` rather than a
-definite value; this CLI normalizes that to `enabled: false`.
+`device usb get-monitor`/`set-monitor` control whether USB peripheral
+change-alerting is on (alert when a USB device is connected/
+disconnected). They use the `get_usb_change`/`set_peripheral_monitor`
+devicecontrol actions, confirmed against a live server via a real packet
+capture and cross-verified by toggling `set-monitor` true/false and
+observing `get-monitor` correctly reflects each change. (A brief earlier
+version of this client swapped in `get_usb_storage_status`/
+`set_usb_storage_status` instead, based on a packet capture that turned
+out to be for a different, separate feature - USB mass-storage access,
+not this one; that action's SET call succeeded and was logged under a
+friendly audit-log event name, which looked like good evidence at the
+time, but its GET side never reflected the change on a live device
+tested, so it was reverted. A GET that actually reflects the SET is
+stronger evidence of a real, working toggle than an audit-log label.)
+USB mass-storage access itself (`get_usb_storage_status`/
+`set_usb_storage_status`) isn't currently exposed as a command, since its
+GET side couldn't be confirmed working.
 
 `device monitor`'s `value` is the usage percentage (0-100) for whichever
 `--type` you asked for - CPU usage % for `--type cpu`, memory usage % for
@@ -209,8 +215,10 @@ doc comment in `internal/DeviceOn-EIM/types.go`.
 `device process monitored` is also undocumented (the `get_monitor_app`
 devicecontrol action, found the same way) and normalized similarly -
 `threadcpuloading`/`threadmemloading` become numeric `cpu_percent`/
-`mem_percent`, `threadismonitor` becomes a real `is_monitored` boolean.
-Its per-item field shape is inferred by analogy with the sibling
+`mem_percent`, `threadismonitor` becomes a real `is_monitored` boolean,
+and `pid` becomes a real number (the agent reports it as a numeric
+string, e.g. `"pid":"639"` - confirmed against a live server). Its
+per-item field shape is inferred by analogy with the sibling
 `get_software_info` action (same underlying process-monitor subsystem)
 rather than verified against a populated list - see the
 `MonitoredProcess` doc comment in `internal/DeviceOn-EIM/types.go`.
@@ -260,7 +268,9 @@ endpoint path is `/api/systemLog/byPage` (capital `P`). An earlier version
 of this CLI called the lowercase `/api/systemLog/bypage`, which the server
 rejects with an HTTP 400 "Invalid path" error - that was a bug in this
 client, not a genuine server limitation, and this whole command group had
-been removed as a result before the mistake was found and fixed.
+been removed as a result before the mistake was found and fixed. `level`
+and `pid` are normalized to real JSON numbers - the server reports both
+as numeric strings (e.g. `"level":"4"`), confirmed against a live server.
 
 ### OTA deployment
 

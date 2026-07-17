@@ -51,7 +51,9 @@ list.
   used the lowercase `/api/systemLog/bypage`, which the server rejects
   with an HTTP 400 "Invalid path" error, and this whole command group had
   been removed as a result before that bug (not a genuine server
-  limitation) was found and fixed.
+  limitation) was found and fixed. `level` and `pid` are normalized to
+  real JSON numbers - the server reports both as numeric strings (e.g.
+  `"level":"4"`), confirmed against a live server.
 - `log operations list` is not documented in AppHub-v2.3.0.md - it was
   reverse-engineered from `OperationRecordServlet.java` and its field
   names/shapes (`orid`, `type`, `event`, `target`, `username`, `ts`) are

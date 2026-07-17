@@ -88,7 +88,7 @@ action) - confirmed to succeed against a live device (visible afterward in
 Example 示例: eim-skill log system set-monitor "146打包机" on
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		enabled, err := parseOnOff(args[1])
 		if err != nil {
@@ -133,6 +133,13 @@ previously removed.
 这是我们自己的错误，并非服务器本身的限制，此前因此错误地移除了这条
 命令，现已恢复并修正。
 
+"level" and "pid" are normalized to real JSON numbers - the server
+reports both as numeric strings (e.g. "level":"4"), confirmed against a
+live server via a real packet capture.
+
+"level" 和 "pid" 已归一化成真正的JSON数字——服务器返回的是数字字符串
+（如 "level":"4"），已通过真实抓包在真实服务器上验证过。
+
 Example 示例: eim-skill log system list --device-id C4:00:AD:11:DA:97 --limit 10
 
 Example output 输出示例 (real 真实返回):
@@ -145,16 +152,16 @@ Example output 输出示例 (real 真实返回):
         "devname": "Server84.172",
         "content": "Using degraded feature set (UDP) for DNS server 240e:f:a00b::6.",
         "os": "linux",
-        "level": "4",
+        "level": 4,
         "mode": "Systemdlog",
         "name": "systemd-resolved",
-        "pid": "459",
+        "pid": 459,
         "eventId": "",
         "ts": 1784255095392
       }
     ]
   }`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		limit, _ := cmd.Flags().GetInt("limit")
 		deviceID, _ := cmd.Flags().GetString("device-id")
@@ -198,7 +205,7 @@ undone.
 Example 示例: eim-skill log system delete-by-device "146打包机"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -243,7 +250,7 @@ Example output 输出示例 (real 真实返回):
       }
     ]
   }`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		limit, _ := cmd.Flags().GetInt("limit")
 		target, _ := cmd.Flags().GetString("target")
@@ -277,7 +284,7 @@ be undone.
 Example 示例: eim-skill log operations delete-all
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.NoArgs,
+	Args: requireArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {

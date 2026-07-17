@@ -1,4 +1,4 @@
-base_url: http://172.21.73.146:8080
+base_url: https://eim.advantech.com.cn
 username: admin
-password: admin
-repo_base_url: http://172.21.73.146:30001
+password: Admin@2025
+repo_base_url: https://eim.advantech.com.cn:30001

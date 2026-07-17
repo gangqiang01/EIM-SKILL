@@ -50,7 +50,7 @@ Example output 输出示例 (real, trimmed 真实返回，已截断):
       "net_io": [{"name": "enp0s3", "rx_bytes": 301688868, "tx_bytes": 351754097}]
     }
   }`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -106,7 +106,7 @@ Example output 输出示例 (real 真实返回):
       {"metric": "battery_available", "enabled": false, "warn": 90, "error": 95}
     ]
   }`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -159,7 +159,7 @@ Example 示例: eim-skill device threshold set "146打包机" cpu_usage on --war
        eim-skill device threshold set "146打包机" cpu_temp off   # just toggles off, keeps existing warn/error
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(3),
+	Args: requireArgs(cobra.ExactArgs(3)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		metric := args[1]
 		enabled, err := parseOnOff(args[2])
@@ -228,16 +228,19 @@ var deviceProcessMonitoredCmd = &cobra.Command{
 	Use:   "monitored <endpoint-or-name>",
 	Short: "List the processes currently selected for application/process monitoring",
 	Long: `List the processes currently selected for monitoring, with normalized
-numeric CPU/memory percentages and a real is_monitored boolean.
+numeric CPU/memory percentages, a real is_monitored boolean, and pid as a
+number (the agent reports it as a numeric string, e.g. "pid":"639" -
+confirmed against a live server).
 
 列出当前被选中监控的进程，CPU/内存占用已转成数字百分比，is_monitored
-是真正的布尔值。
+是真正的布尔值，pid 也已归一化成数字（agent 返回的是数字字符串，如
+"pid":"639"——已用真实服务器验证过）。
 
 Example 示例: eim-skill device process monitored "08:00:27:33:EC:2E"
 
 Example output 输出示例 (empty when nothing is selected 未选中任何进程
 时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -310,7 +313,7 @@ Example output 输出示例 (real, trimmed 真实返回，已截断):
 
 Example output 输出示例 (empty when nothing is selected for monitoring
 未选中任何容器监控时返回空数组): {"status": 200, "msg": "", "data": []}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -329,42 +332,38 @@ Example output 输出示例 (empty when nothing is selected for monitoring
 	},
 }
 
-// USB storage device access
+// USB peripheral change monitoring
 
 var deviceUsbCmd = &cobra.Command{
 	Use:   "usb",
-	Short: "Get/set whether USB storage device access is enabled",
-	Long: `Get/set whether the device allows USB storage devices (e.g. a USB flash
-drive) to be used.
+	Short: "USB peripheral change-alerting",
+	Long: `Get/set whether USB peripheral change-alerting is on (alert when a USB
+device is connected/disconnected).
 
-获取/设置设备是否允许使用 USB 存储设备（如U盘）。`,
+获取/设置 USB 外设变更告警是否开启（设备插拔时触发提醒）。`,
 }
 
 var deviceUsbGetMonitorCmd = &cobra.Command{
 	Use:   "get-monitor <endpoint-or-name>",
-	Short: "Report whether USB storage device access is enabled",
-	Long: `Report whether the device currently allows USB storage devices to be used.
+	Short: "Report whether USB peripheral change monitoring is enabled",
+	Long: `Report whether USB peripheral change-alerting is currently on (alert when
+a USB device is connected/disconnected).
 
-查询设备当前是否允许使用 USB 存储设备。
+查询USB外设变更告警（插拔提醒）当前是否开启。
 
-Not documented in AppHub-v2.3.0.md; uses the "get_usb_storage_status"
+Not documented in AppHub-v2.3.0.md; uses the "get_usb_change"
 devicecontrol action, confirmed against a live server via a real packet
-capture. An earlier version instead used "get_usb_change" (based on an
-incorrect assumption that this command was about alerting on USB
-connect/disconnect rather than storage access) - fixed via the real
-packet capture. Some devices report an empty result for this action
-(returned as enabled: false here) rather than a definite value.
+capture and cross-verified by toggling "usb set-monitor" true/false and
+observing this correctly reflects each change.
 
-未在 AppHub-v2.3.0.md 中记录；使用 "get_usb_storage_status" 设备控制
-动作，已通过真实抓包在真实服务器上验证过。早期版本用的是
-"get_usb_change"（错误地以为这个命令是"USB插拔告警"而不是"存储访问
-开关"）——已根据真实抓包修复。部分设备对这个动作会返回空结果（这里会
-归一化为 enabled: false），而不是一个确切的值。
+未在 AppHub-v2.3.0.md 中记录；使用 "get_usb_change" 设备控制动作，
+已通过真实抓包在真实服务器上验证过，并通过交替切换 "usb set-monitor"
+true/false 后观察这里能正确反映每次变化，做了交叉验证。
 
 Example 示例: eim-skill device usb get-monitor "08:00:27:33:EC:2E"
 
 Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"enabled": false}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
@@ -385,38 +384,44 @@ Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "dat
 
 var deviceUsbSetMonitorCmd = &cobra.Command{
 	Use:   "set-monitor <endpoint-or-name> <on|off>",
-	Short: "Enable or disable USB storage device access",
-	Long: `Turn USB storage device access on or off - when off, the device won't
-allow USB storage devices (e.g. a USB flash drive) to be used.
+	Short: "Enable or disable USB peripheral change monitoring",
+	Long: `Turn USB peripheral change-alerting on or off (alert when a USB device
+is connected/disconnected).
 
-开启或关闭 USB 存储设备访问——关闭后设备将不允许使用 USB 存储设备
-（如U盘）。
+开启或关闭USB外设变更告警（插拔提醒）。
 
-Not documented in AppHub-v2.3.0.md; uses the "set_usb_storage_status"
-devicecontrol action, confirmed against a live server via a real packet
-capture and cross-checked in "log operations list"'s audit trail, where
-this action is logged under the friendly event names "enableUsb"/
-"disableUsb" (unlike most actions, which are logged as raw JSON) -
-confirming the server specially recognizes it as a real, meaningful
-action. An earlier version instead sent "set_peripheral_monitor"/
-"usb_change" (based on an incorrect assumption that this command was
-about alerting on USB connect/disconnect), which the audit trail logged
-as raw unrecognized JSON rather than a friendly event name - fixed via
-the real packet capture.
+Not documented in AppHub-v2.3.0.md; uses the "set_peripheral_monitor"/
+"usb_change" devicecontrol action, confirmed against a live server via a
+real packet capture and cross-verified against "usb get-monitor":
+toggling this true/false and re-reading "get-monitor" correctly reflects
+each change.
 
-未在 AppHub-v2.3.0.md 中记录；使用 "set_usb_storage_status" 设备控制
-动作，已通过真实抓包在真实服务器上验证过，并在 "log operations list"
-的审计记录里交叉核实——这个动作会被记录为友好的事件名
-"enableUsb"/"disableUsb"（不同于大多数动作只会记录原始JSON），说明
-服务器确实识别并处理了这个动作。早期版本用的是
-"set_peripheral_monitor"/"usb_change"（错误地以为这个命令是"USB插拔
-告警"），审计记录里只留下了未被识别的原始JSON，而不是友好的事件名——
-已根据真实抓包修复。
+未在 AppHub-v2.3.0.md 中记录；使用 "set_peripheral_monitor"/
+"usb_change" 设备控制动作，已通过真实抓包在真实服务器上验证过，并与
+"usb get-monitor" 做了交叉验证：交替切换 true/false 后再查询
+"get-monitor"，能正确反映每次变化。
+
+This is a separate, independent switch from USB mass-storage access
+(whether the device allows USB storage devices like a flash drive to be
+used) - the two shouldn't be confused, even though both are exposed
+under devicecontrol resource 27601. A "get_usb_storage_status"/
+"set_usb_storage_status" action pair also exists for that (its SET call
+succeeds and is logged under a distinct friendly audit-log event name,
+"enableUsb"/"disableUsb"), but that action's GET side never reflected
+the change on a real device tested (always returned an empty result), so
+it isn't currently exposed as a command here.
+
+这和"USB存储设备访问权限"（是否允许USB存储设备如U盘被使用）是两个
+独立的开关，虽然都挂在同一个设备控制资源（27601）下，但不要混淆。
+也存在一组 "get_usb_storage_status"/"set_usb_storage_status" 动作对应
+后者（它的SET调用会成功，并且会被记录为独立的友好审计事件名
+"enableUsb"/"disableUsb"），但在真实设备上测试时，这个动作的GET一侧
+从未正确反映过变化（一直返回空结果），所以目前没有把它做成命令。
 
 Example 示例: eim-skill device usb set-monitor "146打包机" on
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(2),
+	Args: requireArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		enabled, err := parseOnOff(args[1])
 		if err != nil {
@@ -455,7 +460,7 @@ operations. Hasn't been verified against real firmware.
 Example 示例: eim-skill device sync-time "146打包机"
 
 Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
+	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newClient()
 		if err != nil {
