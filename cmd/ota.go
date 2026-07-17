@@ -1162,12 +1162,13 @@ update share one device-side resource, so "apply"/"apply-group" cover
 both.
 
 部署 Docker compose/swarm 编排包。和 Linux/Android 类似，安装和更新
-共用同一个接口，所以 "apply"/"apply-group" 同时覆盖两种场景。To see
-what's already deployed/running on a device, use "device docker info"
-(query-only, part of the device-monitoring feature set) rather than a
-command in this group. 想查看设备上已部署/运行的容器，请用
-"device docker info"（属于设备监控功能，只读查询），而不是这个命令组
-下的命令。`,
+共用同一个接口，所以 "apply"/"apply-group" 同时覆盖两种场景。This
+group has no "what's currently deployed/running" query - "device docker
+monitored" (part of the device-monitoring feature set) only reports the
+subset of containers selected for monitoring, not every deployed
+container. 这个命令组没有"当前已部署/运行了什么"的查询命令——
+"device docker monitored"（属于设备监控功能）只返回被选中监控的那部分
+容器，并非所有已部署的容器。`,
 }
 
 func init() {
@@ -1216,14 +1217,16 @@ var otaDockerStatusCmd = &cobra.Command{
 	Short: "Get a device's most recent Docker OTA task status",
 	Long: `Get the most recent Docker compose/swarm package OTA task status for a
 device (e.g. queued/running/success/failed, per whatever "apply"/
-"apply-group" call was last made against it). For what's currently
-deployed/running (a live snapshot, not task history), use
-"device docker info" instead.
+"apply-group" call was last made against it). This is task history, not a
+live snapshot - "device docker monitored" (device-monitoring feature set)
+only reports containers currently selected for monitoring, not every
+deployed container, so it's not a full substitute.
 
 获取设备最近一次 Docker compose/swarm 编排包 OTA 任务的状态（如排队/
 执行中/成功/失败，对应最近一次对它调用 "apply"/"apply-group" 的
-结果）。如果想看当前实际部署/运行的容器（实时快照，而非任务历史），
-请用 "device docker info"。
+结果）。这是任务历史，不是实时快照——"device docker monitored"
+（设备监控功能）只返回当前被选中监控的容器，并非所有已部署的容器，
+所以不能完全替代这里的查询。
 
 Example 示例: eim-skill ota docker status "146打包机"` + appDeployStatusLongNote,
 	Args: cobra.ExactArgs(1),

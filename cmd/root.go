@@ -92,7 +92,7 @@ func Execute() int {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "conf/config.yaml", "config file path (配置文件路径)")
-	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "AppHub/DeviceLink server base URL (overrides config file, e.g. http://127.0.0.1:30010) - 服务器地址（覆盖配置文件）")
+	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "DeviceOn-EIM server base URL (overrides config file, e.g. http://127.0.0.1:30010) - 服务器地址（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&username, "username", "", "login username (overrides config file) - 登录用户名（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&password, "password", "", "login password (overrides config file) - 登录密码（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&repoBaseURL, "repo-base-url", "", "repo server (m2m-management-edge) base URL (overrides config file, e.g. http://127.0.0.1:30001) - 软件包仓库服务地址（覆盖配置文件）")

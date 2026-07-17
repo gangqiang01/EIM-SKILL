@@ -1,103 +1,69 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
-
 	"github.com/spf13/cobra"
 )
 
 var logCmd = &cobra.Command{
 	Use:   "log",
-	Short: "Operation records (audit log) and agent (client) logs",
-	Long: `Operation records (an audit log of admin actions) and device agent
-(client) log retrieval.
+	Short: "Device system logs and operation records (audit log)",
+	Long: `Device system log collection/query/delete, and operation records (an
+audit log of admin actions).
 
-操作记录（管理员操作审计日志）查询，以及设备agent（客户端）日志的
-获取。`,
+设备系统日志的采集开关/查询/删除，以及操作记录（管理员操作审计日志）
+查询。`,
 }
 
 var logSystemCmd = &cobra.Command{
 	Use:   "system",
-	Short: "Turn a device's system log collection/reporting on or off",
-	Long: `Turn a device's system log collection/reporting on or off. This only
-configures whether the device collects/reports its own system log; this
-CLI does not currently provide a way to query those collected entries (see
-"log system set-monitor"'s help for why).
+	Short: "Turn a device's system log collection on/off, and query/delete collected entries",
+	Long: `Turn a device's system log collection/reporting on or off ("set-monitor"),
+and query/delete the entries the server has collected ("list"/
+"delete-by-device"). A device needs "set-monitor ... on" run against it at
+least once before "list" will return anything for it.
 
-开启或关闭某台设备的系统日志采集/上报。这里只负责配置"设备是否采集
-并上报系统日志"这个开关；本CLI目前不提供查询这些已采集日志的命令
-（原因见 "log system set-monitor" 的详细说明）。`,
+开启或关闭某台设备的系统日志采集/上报（"set-monitor"），以及查询/删除
+服务器已采集到的日志条目（"list"/"delete-by-device"）。需要先对目标
+设备执行过一次 "set-monitor ... on"，"list" 才会有该设备的数据。`,
 }
 
 var logOperationsCmd = &cobra.Command{
 	Use:   "operations",
 	Short: "Query and delete operation records (an audit log of admin actions)",
 	Long: `Query and delete operation records: an audit trail of admin actions
-performed against AppHub (who did what, to which device/target, and
+performed against DeviceOn-EIM (who did what, to which device/target, and
 when). Not documented in AppHub-v2.3.0.md - reverse-engineered from
 OperationRecordServlet.java and confirmed against a live server.
 
-查询和删除操作记录：记录了针对 AppHub 执行过的管理员操作审计轨迹
-（谁在什么时候对哪个设备/目标做了什么操作）。未在 AppHub-v2.3.0.md
+查询和删除操作记录：记录了针对 DeviceOn-EIM 执行过的管理员操作审计
+轨迹（谁在什么时候对哪个设备/目标做了什么操作）。未在 AppHub-v2.3.0.md
 中记录，是从 OperationRecordServlet.java 反推并已用真实服务器验证过
 的功能。`,
-}
-
-var logAgentCmd = &cobra.Command{
-	Use:   "agent",
-	Short: "Request, poll, and download a device agent's client log",
-	Long: `Fetching an agent's log is asynchronous: the server can't push a file to
-you directly, so it asks the device agent to upload its log to a callback
-address you provide. That means --callback-url must be an HTTP address the
-device can reach and that is actually running a server accepting the
-agent's upload - this CLI does not provide one; run "log agent request",
-wait, poll "log agent status" until it reports success, then
-"log agent download".
-
-获取agent日志是异步流程：服务器不能直接把文件推送给你，而是让设备的
-agent把日志上传到你提供的回调地址。这意味着 --callback-url 必须是
-设备能访问到的、并且真的在运行一个接受上传的HTTP服务的地址——本CLI
-不提供这个服务。流程：先 "log agent request"，等待，轮询
-"log agent status" 直到返回成功，再 "log agent download"。`,
 }
 
 func init() {
 	rootCmd.AddCommand(logCmd)
 	logCmd.AddCommand(logSystemCmd)
 	logCmd.AddCommand(logOperationsCmd)
-	logCmd.AddCommand(logAgentCmd)
 
 	logSystemCmd.AddCommand(logSystemSetMonitorCmd)
+	logSystemCmd.AddCommand(logSystemListCmd)
+	logSystemCmd.AddCommand(logSystemDeleteByDeviceCmd)
 
 	logOperationsCmd.AddCommand(logOperationsListCmd)
-	logOperationsCmd.AddCommand(logOperationsDeleteCmd)
 	logOperationsCmd.AddCommand(logOperationsDeleteAllCmd)
-	logOperationsCmd.AddCommand(logOperationsBatchDeleteCmd)
 
-	logAgentCmd.AddCommand(logAgentRequestCmd)
-	logAgentCmd.AddCommand(logAgentStatusCmd)
-	logAgentCmd.AddCommand(logAgentDownloadCmd)
+	logSystemListCmd.Flags().Int("limit", 20, "how many of the most recent entries to return (返回最近多少条记录)")
+	logSystemListCmd.Flags().String("device-id", "", "only return entries for this device, endpoint or device name (只返回该设备的记录，可用endpoint或设备名)")
+	logSystemListCmd.Flags().String("os", "", "only return entries for this device OS, e.g. \"linux\" (只返回该操作系统的记录，如\"linux\")")
+	logSystemListCmd.Flags().String("keywords", "", "filter by keywords, substring match (按关键字做包含匹配过滤)")
+	logSystemListCmd.Flags().String("mode", "", "filter by log mode, e.g. \"Systemdlog\" (按日志mode过滤，如\"Systemdlog\")")
+	logSystemListCmd.Flags().String("level", "", "filter by log level (按日志级别过滤)")
+	logSystemListCmd.Flags().String("last", "", `only return entries from the last period, e.g. "30m", "12h", "3d" (default: no time filter) - 只返回最近一段时间内的记录，如 "30m"(30分钟)/"12h"(12小时)/"3d"(3天)，不填则不限制时间范围`)
 
 	logOperationsListCmd.Flags().Int("limit", 20, "how many of the most recent entries to return (返回最近多少条记录)")
 	logOperationsListCmd.Flags().String("target", "", "filter by target, substring match (按目标做包含匹配过滤，如设备endpoint或名称)")
 	logOperationsListCmd.Flags().String("last", "", `only return entries from the last period, e.g. "30m", "12h", "3d" (default: no time filter) - 只返回最近一段时间内的记录，如 "30m"(30分钟)/"12h"(12小时)/"3d"(3天)，不填则不限制时间范围`)
-
-	logAgentDownloadCmd.Flags().String("out", "", "file path to save the downloaded log to (default: <endpoint>.zip) - 保存下载日志的文件路径（默认：<endpoint>.zip）")
-}
-
-func parseInt64Args(args []string) ([]int64, error) {
-	ids := make([]int64, 0, len(args))
-	for _, a := range args {
-		id, err := strconv.ParseInt(a, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("%q is not an integer id: %w", a, err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }
 
 var logSystemSetMonitorCmd = &cobra.Command{
@@ -110,24 +76,14 @@ var logSystemSetMonitorCmd = &cobra.Command{
 Not documented in AppHub-v2.3.0.md (inferred from a captured devicecontrol
 request using the "set_monitor_data_report"/"systemd_log_monitor"
 action) - confirmed to succeed against a live device (visible afterward in
-"log operations list"'s audit trail). There is currently no working "list"
-command for querying the collected system log entries themselves: the
-documented /api/systemLog/bypage endpoint returned an HTTP 400 "Invalid
-path" error from a real AppHub server during testing (a server-side
-routing issue, not a request-shape problem - the request matched
-AppHub-v2.3.0.md exactly), so that command (and the delete/
-delete-by-device/batch-delete commands that depended on it to discover
-ids) was removed rather than shipped non-functional.
+"log operations list"'s audit trail). A device needs this turned on before
+"log system list" will return anything for it.
 
 未在 AppHub-v2.3.0.md 中记录（通过抓包分析 devicecontrol 流量中
 "set_monitor_data_report"/"systemd_log_monitor" 动作得到）——已在真实
 设备上验证执行成功（执行后能在 "log operations list" 的审计记录里
-看到）。目前本CLI没有可用的"查询已采集系统日志"命令：文档记录的
-/api/systemLog/bypage 接口在真实 AppHub 服务器测试时返回了HTTP 400
-"Invalid path" 错误（是服务端路由层面的问题，不是请求格式问题——
-请求参数与 AppHub-v2.3.0.md 文档完全一致），因此这条命令（以及依赖它
-来发现日志id的 delete/delete-by-device/batch-delete）已被整组移除，
-而不是保留一个实际用不了的功能。
+看到）。需要先对目标设备打开这个开关，"log system list" 才会有该设备
+的数据。
 
 Example 示例: eim-skill log system set-monitor "146打包机" on
 
@@ -147,6 +103,112 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 			return err
 		}
 		if err := client.SetSystemLogMonitorEnabled(endpoint, enabled); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var logSystemListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List a device's collected system log entries",
+	Long: `List system log entries the server has collected from devices (requires
+"log system set-monitor <device> on" to have been run against a device at
+least once - otherwise it has nothing to report).
+
+Not documented in AppHub-v2.3.0.md - reverse-engineered from a real packet
+capture. The endpoint path is /api/systemLog/byPage (capital P); an
+earlier version of this CLI used the lowercase /api/systemLog/bypage,
+which the server rejects with an HTTP 400 "Invalid path" error - that
+mistake, not a genuine server limitation, is why this command was
+previously removed.
+
+列出服务器已采集到的设备系统日志条目（需要先对目标设备执行过一次
+"log system set-monitor <device> on"，否则该设备不会有任何数据）。
+
+未在 AppHub-v2.3.0.md 中记录——通过真实抓包反推得到。接口路径是
+/api/systemLog/byPage（大写P）；本CLI早期版本用的是小写的
+/api/systemLog/bypage，会被服务器返回HTTP 400 "Invalid path" 错误——
+这是我们自己的错误，并非服务器本身的限制，此前因此错误地移除了这条
+命令，现已恢复并修正。
+
+Example 示例: eim-skill log system list --device-id C4:00:AD:11:DA:97 --limit 10
+
+Example output 输出示例 (real 真实返回):
+  {
+    "status": 200, "msg": "",
+    "data": [
+      {
+        "id": 109120,
+        "deviceId": "C4:00:AD:11:DA:97",
+        "devname": "Server84.172",
+        "content": "Using degraded feature set (UDP) for DNS server 240e:f:a00b::6.",
+        "os": "linux",
+        "level": "4",
+        "mode": "Systemdlog",
+        "name": "systemd-resolved",
+        "pid": "459",
+        "eventId": "",
+        "ts": 1784255095392
+      }
+    ]
+  }`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		limit, _ := cmd.Flags().GetInt("limit")
+		deviceID, _ := cmd.Flags().GetString("device-id")
+		osFilter, _ := cmd.Flags().GetString("os")
+		keywords, _ := cmd.Flags().GetString("keywords")
+		mode, _ := cmd.Flags().GetString("mode")
+		level, _ := cmd.Flags().GetString("level")
+		last, _ := cmd.Flags().GetString("last")
+		begin, end, err := lastDurationWindow(last)
+		if err != nil {
+			return err
+		}
+
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		if deviceID != "" {
+			deviceID, err = resolveDeviceEndpoint(client, deviceID)
+			if err != nil {
+				return err
+			}
+		}
+		logs, err := client.ListSystemLogs(1, limit, deviceID, osFilter, keywords, mode, level, begin, end)
+		if err != nil {
+			return err
+		}
+		printJSON(logs)
+		return nil
+	},
+}
+
+var logSystemDeleteByDeviceCmd = &cobra.Command{
+	Use:   "delete-by-device <endpoint-or-name>",
+	Short: "Delete every system log entry for a device",
+	Long: `Delete every collected system log entry for one device. This cannot be
+undone.
+
+删除某台设备的全部系统日志记录。此操作不可撤销，请谨慎使用。
+
+Example 示例: eim-skill log system delete-by-device "146打包机"
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.DeleteSystemLogsByDevice(endpoint); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -204,35 +266,6 @@ Example output 输出示例 (real 真实返回):
 	},
 }
 
-var logOperationsDeleteCmd = &cobra.Command{
-	Use:   "delete <id>",
-	Short: "Delete a single operation record",
-	Long: `Delete one operation record by its id (the "orid" field from
-"log operations list").
-
-按id（"log operations list" 返回的 "orid" 字段）删除单条操作记录。
-
-Example 示例: eim-skill log operations delete 113
-
-Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.ParseInt(args[0], 10, 64)
-		if err != nil {
-			return err
-		}
-		client, err := newClient()
-		if err != nil {
-			return err
-		}
-		if err := client.DeleteOperationRecord(id); err != nil {
-			return err
-		}
-		printJSON(map[string]string{"status": "CHANGED"})
-		return nil
-	},
-}
-
 var logOperationsDeleteAllCmd = &cobra.Command{
 	Use:   "delete-all",
 	Short: "Delete every operation record",
@@ -254,145 +287,6 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
-		return nil
-	},
-}
-
-var logOperationsBatchDeleteCmd = &cobra.Command{
-	Use:   "batch-delete <id> [id...]",
-	Short: "Delete multiple operation records",
-	Long: `Delete multiple operation records by id in one call.
-
-一次性按id删除多条操作记录。
-
-Example 示例: eim-skill log operations batch-delete 113 114 115
-
-Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ids, err := parseInt64Args(args)
-		if err != nil {
-			return err
-		}
-		client, err := newClient()
-		if err != nil {
-			return err
-		}
-		if err := client.BatchDeleteOperationRecords(ids); err != nil {
-			return err
-		}
-		printJSON(map[string]string{"status": "CHANGED"})
-		return nil
-	},
-}
-
-var logAgentRequestCmd = &cobra.Command{
-	Use:   "request <endpoint-or-name> <callback-url> <action-id>",
-	Short: "Ask a device's agent to upload its client log to callback-url",
-	Long: `Ask a device's agent to upload its client log to callback-url. action-id
-should be a fresh, unique string you choose - use the same value with
-"log agent status"/"log agent download" to track this specific request.
-
-请求设备的agent把客户端日志上传到 callback-url。action-id 需要你自己
-生成一个唯一字符串，之后用同一个值配合 "log agent status"/
-"log agent download" 来追踪这次请求。
-
-Example 示例: eim-skill log agent request "146打包机" http://192.168.1.10:9000/upload req-20260714-01
-
-Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
-	Args: cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := newClient()
-		if err != nil {
-			return err
-		}
-		endpoint, err := resolveDeviceEndpoint(client, args[0])
-		if err != nil {
-			return err
-		}
-		if err := client.RequestAgentLogUpload(endpoint, args[1], args[2]); err != nil {
-			return err
-		}
-		printJSON(map[string]string{"status": "CHANGED"})
-		return nil
-	},
-}
-
-var logAgentStatusCmd = &cobra.Command{
-	Use:   "status <action-id>",
-	Short: "Poll the status of a previously requested agent log upload",
-	Long: `Poll the status of a previously requested agent log upload (the same
-action-id passed to "log agent request"). Keep polling until the inner
-data.result field reports "success", then call "log agent download".
-
-查询之前请求的agent日志上传进度（使用和 "log agent request" 相同的
-action-id）。持续轮询，直到返回的 data.result 字段变成 "success"，
-再调用 "log agent download"。
-
-Don't confuse the outer envelope's "status" (200/500 - did the CLI call
-itself succeed) with the inner data.result field ("running"/"success"/
-"timeout"/"error" - whether the device's log upload finished).
-
-注意区分外层信封的 "status"（200/500，表示这次CLI调用本身是否成功）
-和内层 data.result 字段（"running"/"success"/"timeout"/"error"，
-表示设备端日志上传本身的进度）。
-
-Example 示例: eim-skill log agent status req-20260714-01`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := newClient()
-		if err != nil {
-			return err
-		}
-		status, err := client.GetAgentLogStatus(args[0])
-		if err != nil {
-			return err
-		}
-		printJSON(status)
-		return nil
-	},
-}
-
-var logAgentDownloadCmd = &cobra.Command{
-	Use:   "download <endpoint-or-name>",
-	Short: "Download a device agent's uploaded client log (can only be downloaded once)",
-	Long: `Download a device agent's previously-uploaded client log, saving it to
---out (default: "<endpoint>.zip" in the current directory, with ":"
-stripped from the endpoint). Can only be downloaded once - the server
-deletes the file after serving it, so re-running this after a successful
-download will fail.
-
-下载设备agent之前已上传的客户端日志，保存到 --out 指定路径（默认为
-当前目录下的 "<endpoint>.zip"，endpoint 中的冒号会被去掉）。只能下载
-一次——服务器在提供文件后会将其删除，成功下载后再次运行此命令会失败。
-
-Example 示例: eim-skill log agent download "146打包机" --out ./146-agent.zip
-
-Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED", "file": "./146-agent.zip"}}`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := newClient()
-		if err != nil {
-			return err
-		}
-		endpoint, err := resolveDeviceEndpoint(client, args[0])
-		if err != nil {
-			return err
-		}
-
-		out, _ := cmd.Flags().GetString("out")
-		if out == "" {
-			out = strings.ReplaceAll(endpoint, ":", "") + ".zip"
-		}
-
-		data, err := client.DownloadAgentLog(endpoint)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(out, data, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", out, err)
-		}
-		printJSON(map[string]string{"status": "CHANGED", "file": out})
 		return nil
 	},
 }

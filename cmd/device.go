@@ -38,7 +38,9 @@ func init() {
 	deviceCmd.AddCommand(deviceMonitorCmd)
 	deviceCmd.AddCommand(deviceRebootCmd)
 	deviceCmd.AddCommand(deviceShutdownCmd)
+	deviceCmd.AddCommand(deviceGetVolumeCmd)
 	deviceCmd.AddCommand(deviceSetVolumeCmd)
+	deviceCmd.AddCommand(deviceGetBacklightCmd)
 	deviceCmd.AddCommand(deviceSetBacklightCmd)
 	deviceCmd.AddCommand(deviceRebootGroupCmd)
 	deviceCmd.AddCommand(deviceShutdownGroupCmd)
@@ -297,14 +299,14 @@ Example output 输出示例 (trimmed 已截断):
 var deviceDeleteCmd = &cobra.Command{
 	Use:   "delete <endpoint-or-name>",
 	Short: "Delete a device",
-	Long: `Permanently remove a device's record from AppHub. This does not affect
-the physical device or its agent software - it only removes AppHub's
-record of it; if the agent is still running and checks in again, the
-device will typically re-register.
+	Long: `Permanently remove a device's record from DeviceOn-EIM. This does not
+affect the physical device or its agent software - it only removes
+DeviceOn-EIM's record of it; if the agent is still running and checks in
+again, the device will typically re-register.
 
-从 AppHub 中永久删除该设备的记录。此操作不影响设备本身或其上运行的
-agent 软件——只是删掉 AppHub 里的这条记录；如果设备的 agent 仍在运行
-并再次上线签到，通常会重新注册出现。
+从 DeviceOn-EIM 中永久删除该设备的记录。此操作不影响设备本身或其上
+运行的 agent 软件——只是删掉 DeviceOn-EIM 里的这条记录；如果设备的
+agent 仍在运行并再次上线签到，通常会重新注册出现。
 
 Example 示例: eim-skill device delete "08:00:27:33:EC:2E"
 
@@ -344,8 +346,28 @@ Example output 输出示例 (empty result when no samples in that window
 如果该时间窗口内没有数据会返回空数组):
   {"status": 200, "msg": "", "data": []}
 
-  or, with samples 或有数据时:
-  {"status": 200, "msg": "", "data": [{"id": 1, "value": 30.2, "ts": 1784011181000}]}`,
+  or, with samples 或有数据时 (--type cpu):
+  {"status": 200, "msg": "", "data": [{"id": 1, "value": 30.2, "ts": 1784011181000}]}
+
+"value" is the usage percentage (0-100) for whichever --type you asked
+for - CPU usage % for --type cpu, memory usage % for --type memory
+(inferred from observed real values matching "device get-monitor"'s
+cpu.usage_percent/memory.usage_percent fields, not from a spec). "ts" is
+the sample's Unix-millisecond timestamp.
+
+"value" 是所选 --type 对应的使用率百分比（0-100）——--type cpu 时是
+CPU使用率，--type memory 时是内存使用率（根据观察到的真实数值推断，
+与 "device get-monitor" 的 cpu.usage_percent/memory.usage_percent
+字段吻合，并非来自官方规范）。"ts" 是采样点的 Unix 毫秒时间戳。
+
+Each sample's "value" is parsed leniently: some servers report it as a
+JSON number, others as a numeric string - both are normalized to a plain
+number here (confirmed via a real bug report - an earlier version assumed
+a plain number and failed to decode servers that report it as a string).
+
+每个采样点的 "value" 采用宽松解析：有的服务器返回的是 JSON 数字，有的
+返回的是数字字符串——这里统一归一化成普通数字（此前版本假设一定是
+数字，遇到返回字符串的服务器会解码失败，已根据真实反馈修复）。`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataType, _ := cmd.Flags().GetString("type")
@@ -377,10 +399,13 @@ var deviceAddToGroupCmd = &cobra.Command{
 	Short: "Add a device to a device group (keeps its existing group memberships)",
 	Long: `Add a device to group-name. This is additive - the device keeps every
 group it already belonged to; it does not move the device out of any
-other group.
+other group. Fails if group-name doesn't exist (checked against "group
+list") - the underlying server endpoint would otherwise silently accept
+and record a nonexistent group name.
 
 把设备加入指定的设备组。这是"追加"操作——设备原本所在的其他组不会被
-移除，只是多加入了一个组。
+移除，只是多加入了一个组。如果 group-name 不存在（会对照 "group list"
+校验）则会报错——否则底层服务器接口会静默接受并记录一个不存在的组名。
 
 Example 示例: eim-skill device add-to-group "08:00:27:33:EC:2E" default
 
@@ -468,20 +493,63 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 	},
 }
 
+var deviceGetVolumeCmd = &cobra.Command{
+	Use:   "get-volume <endpoint-or-name>",
+	Short: "Get a device's current system audio volume (undocumented)",
+	Long: `Get the system audio volume (0-100) last recorded for a device via
+"device set-volume" - null if unavailable.
+
+获取设备当前记录的系统音量（0-100，通过 "device set-volume" 设置）—
+无法获取时为 null。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_audio" devicecontrol
+action, confirmed against a live server. This reflects whatever
+"device set-volume" last recorded - it is not confirmed whether this
+always reflects the actual physical hardware volume on every device
+model (some devices may accept and record a value without applying it to
+real hardware).
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_audio" 设备控制动作，已用真实
+服务器验证过。这个值反映的是 "device set-volume" 最后记录的值——并未
+确认在所有设备型号上都真实对应硬件音量（部分设备可能只是记录了这个值，
+并没有真正应用到硬件上）。
+
+Example 示例: eim-skill device get-volume "146打包机"
+
+Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"volume": 50}}`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		volume, err := client.GetVolume(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]interface{}{"volume": volume})
+		return nil
+	},
+}
+
 var deviceSetVolumeCmd = &cobra.Command{
 	Use:   "set-volume <endpoint-or-name> <0-100>",
-	Short: "Set a device's system audio volume (best effort, undocumented)",
+	Short: "Set a device's system audio volume (undocumented)",
 	Long: `Set a device's system audio volume, 0 (mute) to 100 (max).
 
 设置设备的系统音量，取值 0（静音）到 100（最大）。
 
-UNVERIFIED: not documented in AppHub-v2.3.0.md; inferred from DeviceLink's
-PluginsServlet source (the "audio" devicecontrol action). Verify against
-your device firmware before relying on it in production.
+Not documented in AppHub-v2.3.0.md; uses the "set_audio" devicecontrol
+action, confirmed against a live server (an earlier "audio" key returned
+success without actually changing anything - fixed via a real bug report).
 
-未在 AppHub-v2.3.0.md 中记录，是根据 DeviceLink 的 PluginsServlet 源码
-（"audio" devicecontrol 动作）推断实现，尚未在真实设备固件上验证过，
-生产环境使用前请自行验证效果。
+未在 AppHub-v2.3.0.md 中记录；使用 "set_audio" 设备控制动作，已用真实
+服务器验证过（此前用的 "audio" 这个键虽然返回成功但实际不生效，已根据
+真实反馈修复）。
 
 Example 示例: eim-skill device set-volume "146打包机" 50
 
@@ -491,6 +559,9 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 		volume, err := strconv.Atoi(args[1])
 		if err != nil {
 			return fmt.Errorf("volume must be an integer 0-100: %w", err)
+		}
+		if volume < 0 || volume > 100 {
+			return fmt.Errorf("volume must be between 0 and 100, got %d", volume)
 		}
 
 		client, err := newClient()
@@ -509,20 +580,64 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 	},
 }
 
+var deviceGetBacklightCmd = &cobra.Command{
+	Use:   "get-backlight <endpoint-or-name>",
+	Short: "Get a device's current screen backlight/brightness (undocumented)",
+	Long: `Get the screen backlight/brightness (0-100) last recorded for a device
+via "device set-backlight" - null if unavailable.
+
+获取设备当前记录的屏幕背光/亮度（0-100，通过 "device set-backlight"
+设置）— 无法获取时为 null。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_brightness"
+devicecontrol action, confirmed against a live server. This reflects
+whatever "device set-backlight" last recorded - it is not confirmed
+whether this always reflects the actual physical hardware brightness on
+every device model (some devices may accept and record a value without
+applying it to real hardware).
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_brightness" 设备控制动作，
+已用真实服务器验证过。这个值反映的是 "device set-backlight" 最后记录
+的值——并未确认在所有设备型号上都真实对应硬件亮度（部分设备可能只是
+记录了这个值，并没有真正应用到硬件上）。
+
+Example 示例: eim-skill device get-backlight "146打包机"
+
+Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"brightness": 77}}`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		brightness, err := client.GetBacklight(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]interface{}{"brightness": brightness})
+		return nil
+	},
+}
+
 var deviceSetBacklightCmd = &cobra.Command{
 	Use:   "set-backlight <endpoint-or-name> <0-100>",
-	Short: "Set a device's screen backlight/brightness (best effort, undocumented)",
+	Short: "Set a device's screen backlight/brightness (undocumented)",
 	Long: `Set a device's screen backlight/brightness, 0 (dimmest) to 100 (brightest).
 
 设置设备的屏幕背光/亮度，取值 0（最暗）到 100（最亮）。
 
-UNVERIFIED: not documented in AppHub-v2.3.0.md; inferred from DeviceLink's
-PluginsServlet source (the "brightness" devicecontrol action). Verify
-against your device firmware before relying on it in production.
+Not documented in AppHub-v2.3.0.md; uses the "set_brightness"
+devicecontrol action, confirmed against a live server (an earlier
+"brightness" key returned success without actually changing anything -
+fixed via a real bug report).
 
-未在 AppHub-v2.3.0.md 中记录，是根据 DeviceLink 的 PluginsServlet 源码
-（"brightness" devicecontrol 动作）推断实现，尚未在真实设备固件上验证
-过，生产环境使用前请自行验证效果。
+未在 AppHub-v2.3.0.md 中记录；使用 "set_brightness" 设备控制动作，
+已用真实服务器验证过（此前用的 "brightness" 这个键虽然返回成功但
+实际不生效，已根据真实反馈修复）。
 
 Example 示例: eim-skill device set-backlight "146打包机" 80
 
@@ -532,6 +647,9 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 		brightness, err := strconv.Atoi(args[1])
 		if err != nil {
 			return fmt.Errorf("brightness must be an integer 0-100: %w", err)
+		}
+		if brightness < 0 || brightness > 100 {
+			return fmt.Errorf("brightness must be between 0 and 100, got %d", brightness)
 		}
 
 		client, err := newClient()
@@ -553,16 +671,35 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 var deviceRebootGroupCmd = &cobra.Command{
 	Use:   "reboot-group <group-name>",
 	Short: "Reboot every device in a device group immediately",
-	Long: `Reboot every device in group-name in a single call (documented in
-AppHub-v2.3.0.md as "PUT send command-向批量设备发送命令",
-PUT /api/plugins/batch/{groupname}/40008/0/27601), rather than looping
+	Long: `Reboot every device in group-name in a single call, rather than looping
 "device reboot" over each device individually. --label optionally narrows
 the target to devices in the group that also carry that label.
 
-一次性重启整个设备组下的所有设备（对应 AppHub-v2.3.0.md 文档中的
-"PUT send command-向批量设备发送命令" 接口），而不是对组内每台设备
-逐个调用 "device reboot"。--label 可选，用来只对组内带有该标签的设备
-生效，不填则对整组生效。
+Resolves group-name (and --label, if given) to the matching devices'
+endpoints first, then reboots all of them in one request to
+AppHub-v2.3.0.md's documented batch-execute resource,
+PUT /api/plugins/batchExec/40008/0/27601 (body {"clientIds":[...],
+"value":...} - note the doc's own example has a typo, "cliendIds"; the
+real field is "clientIds", confirmed against a live server). An earlier
+implementation instead called the doc's simpler-looking
+PUT /api/plugins/batch/{groupname}/40008/0/27601 directly, but that was
+found - via a real bug report, reproduced independently against a second
+server - to reliably fail with an empty-bodied HTTP 500 for any payload,
+so this now resolves the group client-side first.
+
+一次性重启整个设备组下的所有设备，而不是对组内每台设备逐个调用
+"device reboot"。--label 可选，用来只对组内带有该标签的设备生效，
+不填则对整组生效。
+
+具体做法：先把 group-name（以及可选的 --label）解析成匹配设备的
+endpoint 列表，再通过 AppHub-v2.3.0.md 文档记录的批量执行接口
+PUT /api/plugins/batchExec/40008/0/27601 一次性对这些设备执行重启
+（请求体为 {"clientIds":[...],"value":...}——注意文档示例里字段名
+写错成了 "cliendIds"，实际字段名是 "clientIds"，已用真实服务器验证）。
+早期实现直接调用文档里看起来更简单的
+PUT /api/plugins/batch/{groupname}/40008/0/27601，但经真实用户反馈、
+并在另一台服务器上独立复现确认，这个接口对任何请求体都会稳定返回
+一个空内容的 HTTP 500——因此现在改为先在客户端把组解析成具体设备。
 
 Example 示例: eim-skill device reboot-group default --label edge-line-1
 
@@ -585,13 +722,16 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 var deviceShutdownGroupCmd = &cobra.Command{
 	Use:   "shutdown-group <group-name>",
 	Short: "Shut down every device in a device group immediately",
-	Long: `Shut down every device in group-name in a single call, using the same
-group-batch devicecontrol resource as "device reboot-group". --label
-optionally narrows the target to devices in the group that also carry
-that label.
+	Long: `Shut down every device in group-name in a single call, resolving the
+group (and --label, if given) to device endpoints the same way as
+"device reboot-group" - see its help for the full explanation (and why
+it's implemented via batchExec rather than the doc's simpler-looking
+group-name-in-the-URL endpoint).
 
-一次性关闭整个设备组下的所有设备，使用和 "device reboot-group" 相同的
-批量设备控制接口。--label 可选，用来只对组内带有该标签的设备生效。
+一次性关闭整个设备组下的所有设备，解析 group-name（和可选的 --label）
+的方式与 "device reboot-group" 相同——完整说明（以及为什么改用
+batchExec 而不是文档里那个看起来更简单、URL里直接带组名的接口）
+请见它的帮助信息。
 
 Example 示例: eim-skill device shutdown-group default
 
@@ -613,15 +753,17 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 
 var deviceSetVolumeGroupCmd = &cobra.Command{
 	Use:   "set-volume-group <group-name> <0-100>",
-	Short: "Set the system audio volume on every device in a device group (best effort, undocumented)",
+	Short: "Set the system audio volume on every device in a device group (undocumented)",
 	Long: `Set the system audio volume (0-100) on every device in group-name in a
-single call. --label optionally narrows the target to devices in the
-group that also carry that label. Same undocumented/best-effort caveat as
-"device set-volume" applies.
+single call, resolving the group (and --label, if given) to device
+endpoints the same way as "device reboot-group" (see its help for the
+full explanation). Same "set_audio" action as "device set-volume" - see
+its help for the fixed-action-key note.
 
-一次性设置整个设备组下所有设备的系统音量（0-100）。--label 可选，用来
-只对组内带有该标签的设备生效。和 "device set-volume" 一样，这是未文档化
-的尽力而为实现，使用前请自行验证。
+一次性设置整个设备组下所有设备的系统音量（0-100），解析 group-name
+（和可选的 --label）的方式与 "device reboot-group" 相同（完整说明见
+它的帮助信息）。使用和 "device set-volume" 相同的 "set_audio" 动作——
+修复动作键的说明见它的帮助信息。
 
 Example 示例: eim-skill device set-volume-group default 50
 
@@ -631,6 +773,9 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 		volume, err := strconv.Atoi(args[1])
 		if err != nil {
 			return fmt.Errorf("volume must be an integer 0-100: %w", err)
+		}
+		if volume < 0 || volume > 100 {
+			return fmt.Errorf("volume must be between 0 and 100, got %d", volume)
 		}
 		label, _ := cmd.Flags().GetString("label")
 
@@ -648,15 +793,17 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 
 var deviceSetBacklightGroupCmd = &cobra.Command{
 	Use:   "set-backlight-group <group-name> <0-100>",
-	Short: "Set the screen backlight/brightness on every device in a device group (best effort, undocumented)",
+	Short: "Set the screen backlight/brightness on every device in a device group (undocumented)",
 	Long: `Set the screen backlight/brightness (0-100) on every device in
-group-name in a single call. --label optionally narrows the target to
-devices in the group that also carry that label. Same
-undocumented/best-effort caveat as "device set-backlight" applies.
+group-name in a single call, resolving the group (and --label, if given)
+to device endpoints the same way as "device reboot-group" (see its help
+for the full explanation). Same "set_brightness" action as
+"device set-backlight" - see its help for the fixed-action-key note.
 
-一次性设置整个设备组下所有设备的屏幕背光/亮度（0-100）。--label 可选，
-用来只对组内带有该标签的设备生效。和 "device set-backlight" 一样，这是
-未文档化的尽力而为实现，使用前请自行验证。
+一次性设置整个设备组下所有设备的屏幕背光/亮度（0-100），解析
+group-name（和可选的 --label）的方式与 "device reboot-group" 相同
+（完整说明见它的帮助信息）。使用和 "device set-backlight" 相同的
+"set_brightness" 动作——修复动作键的说明见它的帮助信息。
 
 Example 示例: eim-skill device set-backlight-group default 80
 
@@ -666,6 +813,9 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 		brightness, err := strconv.Atoi(args[1])
 		if err != nil {
 			return fmt.Errorf("brightness must be an integer 0-100: %w", err)
+		}
+		if brightness < 0 || brightness > 100 {
+			return fmt.Errorf("brightness must be between 0 and 100, got %d", brightness)
 		}
 		label, _ := cmd.Flags().GetString("label")
 

@@ -248,11 +248,17 @@ type statusResponse struct {
 	ErrMsg string `json:"errmsg"`
 }
 
-// MonitorDataPoint is a single CPU or memory monitoring sample for a device.
+// MonitorDataPoint is a single CPU or memory monitoring sample for a
+// device. Value is the usage percentage (0-100) for whichever type the
+// query asked for (CPU or memory usage %, inferred from observed values
+// matching BoardInfo's cpu.usage_percent/memory.usage_percent, not a
+// spec) at Unix-millisecond timestamp Ts. Value is a FlexibleNumber (not
+// a plain float64) because some servers/devices report it as a numeric
+// string rather than a JSON number - confirmed via a real bug report.
 type MonitorDataPoint struct {
-	ID    int64   `json:"id"`
-	Value float64 `json:"value"`
-	Ts    int64   `json:"ts"`
+	ID    int64          `json:"id"`
+	Value FlexibleNumber `json:"value"`
+	Ts    int64          `json:"ts"`
 }
 
 type setGroupsRequest struct {
@@ -265,13 +271,17 @@ type execActionRequest struct {
 	Value string `json:"value"`
 }
 
-// execActionGroupRequest is the body for the group-batch devicecontrol
-// resource (PUT /api/plugins/batch/{groupname}/40008/0/27601), used to
-// reboot/shutdown/set-volume/set-backlight every device in a group at once.
-type execActionGroupRequest struct {
-	ID        int    `json:"id"`
-	Value     string `json:"value"`
-	LabelName string `json:"labelName,omitempty"`
+// execBatchRequest is the body for the batch-execute devicecontrol
+// resource (PUT /api/plugins/batchExec/40008/0/27601), used to
+// reboot/shutdown/set-volume/set-backlight an explicit list of devices at
+// once. Unlike the single-device execActionRequest, there's no "id" field
+// here - the resource id (27601) is only in the URL path. clientIds must
+// be resolved client-side first (e.g. from a group+label via
+// ListDevicesByCondition) - this endpoint has no server-side group
+// lookup of its own.
+type execBatchRequest struct {
+	ClientIDs []string `json:"clientIds"`
+	Value     string   `json:"value"`
 }
 
 type actionValue struct {
@@ -473,26 +483,14 @@ var settableThresholdMetrics = map[string]bool{
 	"network_download_speed": true,
 }
 
-// ProcessInfo is a running process/thread on a Windows or Linux device, as
-// reported by the devicecontrol "get_software_info" action.
-type ProcessInfo struct {
-	ThreadCmd        string `json:"threadcmd"`
-	ThreadPid        string `json:"threadpid"`
-	ThreadCPULoading string `json:"threadcpuloading"`
-	ThreadMemLoading string `json:"threadmemloading"`
-	ThreadStatus     string `json:"threadstatus"`
-	ThreadUsername   string `json:"threadusername"`
-	ThreadIsMonitor  string `json:"threadismonitor"`
-}
-
 // MonitoredProcess is one process currently selected for application/
 // process monitoring, normalized from the agent's string-typed fields
 // (devicecontrol "get_monitor_app" action) into proper types.
 //
 // NOTE: not documented in AppHub-v2.3.0.md. Field shape is inferred by
-// analogy with the sibling "get_software_info" action (same process-
-// monitor subsystem, see ProcessInfo) - not empirically confirmed against
-// a populated list, since no processes were being monitored on the device
+// analogy with the sibling "get_software_info" action (same underlying
+// process-monitor subsystem) - not empirically confirmed against a
+// populated list, since no processes were being monitored on the device
 // this was tested against (only the empty-list case is confirmed).
 type MonitoredProcess struct {
 	Command     string         `json:"command"`
@@ -526,31 +524,28 @@ func (raw rawMonitoredProcess) normalize() MonitoredProcess {
 	}
 }
 
-// DockerContainer is a single container belonging to a DockerGroup.
+// DockerContainer is a single Docker container on a device, as reported
+// by the devicecontrol "get_docker_info" action - confirmed against a
+// live server via a real packet capture. The action returns every
+// container regardless of monitor status; GetDockerInfo filters to the
+// ones with IsMonitor == "true".
+//
+// NOTE: not documented in AppHub-v2.3.0.md. An earlier implementation
+// instead read GET .../60001/0/27300, assuming a response grouped by
+// compose project (`{"code":...,"data":[{"tag","version","type",
+// "control","docker":[...]}]}`) - that endpoint returned an empty result
+// on a live server with real containers deployed, so this was switched
+// to the working devicecontrol action/response shape.
 type DockerContainer struct {
-	Container string `json:"container"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
 	Image     string `json:"image"`
-	Version   string `json:"version"`
-	IsRunning string `json:"isRunning"`
-}
-
-// DockerGroup is a deployed Docker compose/swarm/image group on a device,
-// as reported by GET .../60001/0/27300.
-type DockerGroup struct {
-	Tag     string            `json:"tag"`
-	Version string            `json:"version"`
-	Type    string            `json:"type"`
-	Control string            `json:"control"`
-	Docker  []DockerContainer `json:"docker"`
-}
-
-type dockerInfoResponse struct {
-	Code int           `json:"code"`
-	Data []DockerGroup `json:"data"`
-}
-
-type batchIDsRequest struct {
-	IDs []int64 `json:"ids"`
+	Command   string `json:"command"`
+	Ports     string `json:"ports"`
+	State     string `json:"state"`
+	Compose   string `json:"compose"`
+	Created   string `json:"created"`
+	IsMonitor string `json:"ismonitor"`
 }
 
 // OperationRecord is one audit-log entry of an admin action (device
@@ -576,16 +571,32 @@ type operationRecordsPageResponse struct {
 	Data  []OperationRecord `json:"data"`
 }
 
-// agentLogRequestValue is the plain (non-devicecontrol) LwM2M write value
-// used to ask a device's agent to upload a log file to a callback address.
-type agentLogRequestValue struct {
-	Address  string `json:"address"`
-	ActionID string `json:"actionId"`
+// SystemLogEntry is one row from a device's collected system log (fed by
+// SetSystemLogMonitorEnabled turning collection on for that device).
+type SystemLogEntry struct {
+	ID       int64  `json:"id"`
+	DeviceID string `json:"deviceId"`
+	DevName  string `json:"devname"`
+	Content  string `json:"content"`
+	OS       string `json:"os"`
+	Level    string `json:"level"`
+	Mode     string `json:"mode"`
+	Name     string `json:"name"`
+	Pid      string `json:"pid"`
+	EventID  string `json:"eventId"`
+	Ts       int64  `json:"ts"`
 }
 
-type logStatusResponse struct {
-	Result   string `json:"result"` // "running", "success", "timeout", or "error"
-	ActionID string `json:"actionId"`
+// systemLogsPageResponse mirrors /api/systemLog/byPage's actual response:
+// {"count":<n>,"data":[...]} - confirmed against a live server, same
+// wrapper shape as operationRecordsPageResponse.
+type systemLogsPageResponse struct {
+	Count int64            `json:"count"`
+	Data  []SystemLogEntry `json:"data"`
+}
+
+type deleteByDeviceIDRequest struct {
+	DeviceID string `json:"deviceId"`
 }
 
 // BoardInfo is a device's board-level monitoring snapshot (devicecontrol

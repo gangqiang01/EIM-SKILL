@@ -1,6 +1,6 @@
 ---
 name: ota-deployment
-description: Look up Android/Windows/Docker/Linux packages and generic files available in the DeviceLink repo server, check what's installed on a device, check a device's most recent OTA/BSP task status, and push an install/update/uninstall to a single device or a whole device group (OTA). Use this whenever the user asks to deploy, install, update, uninstall, or OTA a package/app/file to AppHub-managed devices, or asks whether a recent deployment succeeded, via the eim-skill CLI. 中文触发词：OTA、软件部署、应用部署、安装包、批量部署、按组部署、卸载应用、部署文件、部署状态、安装状态、BSP、系统更新。
+description: Look up Android/Windows/Docker/Linux packages and generic files available in the DeviceLink repo server, check what's installed on a device, check a device's most recent OTA/BSP task status, and push an install/update/uninstall to a single device or a whole device group (OTA). Use this whenever the user asks to deploy, install, update, uninstall, or OTA a package/app/file to DeviceOn-EIM-managed devices, or asks whether a recent deployment succeeded, via the eim-skill CLI. 中文触发词：OTA、软件部署、应用部署、安装包、批量部署、按组部署、卸载应用、部署文件、部署状态、安装状态、BSP、系统更新。
 ---
 
 # OTA deployment
@@ -10,15 +10,17 @@ package type it supports: Android APKs, Windows exe installers, Windows
 zip/compressed packages, Docker compose/swarm packages, Linux deb/tar
 packages, generic files, and (status-only) BSP/system-image updates.
 Requires `eim-skill` built and configured (see repo README) - talks to
-both the main AppHub server and its companion repo server
+both the main DeviceOn-EIM server and its companion repo server
 (m2m-management-edge).
 
 ## The workflow (same shape for every type)
 
 1. **`ota <type> list`** - what's available in the repo server to push.
 2. **`ota <type> installed <endpoint-or-name>`** - what's already on the
-   device (Android/Windows/Linux only - Docker's equivalent is
-   `device docker info`; File has no "installed" concept).
+   device (Android/Windows/Linux only - Docker has no "list everything
+   deployed" query at all: `device docker monitored` only reports
+   containers currently selected for monitoring, not every deployed
+   container; File has no "installed" concept).
 3. **`ota <type> apply`/`install`/`upgrade` `<endpoint-or-name-or-group>
    <name> <version>`** - look up that name+version in the repo listing,
    resolve its download path, and push it.
@@ -112,7 +114,7 @@ command.
   shapes but wasn't exercised against a live device.
 - `ota <type> status` (all types including `bsp`) is **not documented in
   AppHub-v2.3.0.md** - found via an apifox-exported OpenAPI spec of
-  AppHub's own web console. Every `status` command was confirmed to
+  DeviceOn-EIM's own web console. Every `status` command was confirmed to
   return a successful (non-error) response against a live server, but
   that server had zero OTA/BSP task history recorded, so no command's
   *non-empty* response shape has been verified against real data. Beyond

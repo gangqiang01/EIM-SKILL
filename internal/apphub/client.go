@@ -45,9 +45,9 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	if e.Message != "" {
-		return fmt.Sprintf("apphub: %s (http %d)", e.Message, e.StatusCode)
+		return fmt.Sprintf("DeviceOn-EIM: %s (http %d)", e.Message, e.StatusCode)
 	}
-	return fmt.Sprintf("apphub: request failed (http %d)", e.StatusCode)
+	return fmt.Sprintf("DeviceOn-EIM: request failed (http %d)", e.StatusCode)
 }
 
 func (c *Client) login() error {
@@ -64,7 +64,7 @@ func (c *Client) login() error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("apphub: login request failed: %w", err)
+		return fmt.Errorf("DeviceOn-EIM: login request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -79,10 +79,10 @@ func (c *Client) login() error {
 
 	var loginResp loginResponse
 	if err := json.Unmarshal(data, &loginResp); err != nil {
-		return fmt.Errorf("apphub: decode login response: %w", err)
+		return fmt.Errorf("DeviceOn-EIM: decode login response: %w", err)
 	}
 	if loginResp.Token == "" {
-		return fmt.Errorf("apphub: login succeeded but no token was returned")
+		return fmt.Errorf("DeviceOn-EIM: login succeeded but no token was returned")
 	}
 
 	c.token = loginResp.Token
@@ -151,7 +151,7 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 
 	resp, data, err := doOnce()
 	if err != nil {
-		return fmt.Errorf("apphub: request %s %s failed: %w", method, path, err)
+		return fmt.Errorf("DeviceOn-EIM: request %s %s failed: %w", method, path, err)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -160,7 +160,7 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 		}
 		resp, data, err = doOnce()
 		if err != nil {
-			return fmt.Errorf("apphub: request %s %s failed: %w", method, path, err)
+			return fmt.Errorf("DeviceOn-EIM: request %s %s failed: %w", method, path, err)
 		}
 	}
 
@@ -176,62 +176,10 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("apphub: decode response for %s %s: %w", method, path, err)
+			return fmt.Errorf("DeviceOn-EIM: decode response for %s %s: %w", method, path, err)
 		}
 	}
 	return nil
-}
-
-// downloadFile issues a GET request against path and returns the raw
-// response body, for endpoints that return a binary file rather than the
-// usual JSON envelope. It logs in first if there is no cached token yet,
-// and retries once after a fresh login on 401/403.
-func (c *Client) downloadFile(path string) ([]byte, error) {
-	if c.token == "" {
-		if err := c.login(); err != nil {
-			return nil, err
-		}
-	}
-
-	doOnce := func() (*http.Response, []byte, error) {
-		req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		req.Header.Set("accesstoken", c.token)
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer resp.Body.Close()
-
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, nil, err
-		}
-		return resp, data, nil
-	}
-
-	resp, data, err := doOnce()
-	if err != nil {
-		return nil, fmt.Errorf("apphub: download %s failed: %w", path, err)
-	}
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		if err := c.login(); err != nil {
-			return nil, err
-		}
-		resp, data, err = doOnce()
-		if err != nil {
-			return nil, fmt.Errorf("apphub: download %s failed: %w", path, err)
-		}
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &APIError{StatusCode: resp.StatusCode, Message: string(data)}
-	}
-	return data, nil
 }
 
 // ListDevices returns every device registered on the server.
@@ -292,14 +240,14 @@ func decodeDevicesByCondition(raw json.RawMessage) ([]Device, error) {
 	if trimmed[0] == '[' {
 		var devices []Device
 		if err := json.Unmarshal(trimmed, &devices); err != nil {
-			return nil, fmt.Errorf("apphub: decode devices: %w", err)
+			return nil, fmt.Errorf("DeviceOn-EIM: decode devices: %w", err)
 		}
 		return devices, nil
 	}
 
 	var resp devicesByConditionResponse
 	if err := json.Unmarshal(trimmed, &resp); err != nil {
-		return nil, fmt.Errorf("apphub: decode devices: %w", err)
+		return nil, fmt.Errorf("DeviceOn-EIM: decode devices: %w", err)
 	}
 	return resp.Data, nil
 }
@@ -366,7 +314,7 @@ func (c *Client) DeleteDevice(agentID string) error {
 // pass 0 to omit either bound.
 func (c *Client) MonitorData(agentID, dataType string, beginTs, endTs int64) ([]MonitorDataPoint, error) {
 	if dataType != "cpu" && dataType != "memory" {
-		return nil, fmt.Errorf("apphub: dataType must be \"cpu\" or \"memory\", got %q", dataType)
+		return nil, fmt.Errorf("DeviceOn-EIM: dataType must be \"cpu\" or \"memory\", got %q", dataType)
 	}
 
 	q := url.Values{}
@@ -475,7 +423,7 @@ func (c *Client) GetGroupStatus(groupName string) (*GroupStatus, error) {
 			return &s, nil
 		}
 	}
-	return nil, fmt.Errorf("apphub: no group found with name %q", groupName)
+	return nil, fmt.Errorf("DeviceOn-EIM: no group found with name %q", groupName)
 }
 
 // GroupsOfDevice returns the device groups that the given device endpoint
@@ -498,8 +446,26 @@ func (c *Client) SetDeviceGroups(endpoint string, groupNames []string) error {
 }
 
 // AddDeviceToGroup adds endpoint to groupName without removing it from any
-// device group it already belongs to. Returns the resulting full group list.
+// device group it already belongs to. Returns the resulting full group
+// list. Fails if groupName does not exist - the underlying
+// SetDeviceGroups/bygroupname endpoint accepts and silently records
+// nonexistent group names otherwise (confirmed against a live server).
 func (c *Client) AddDeviceToGroup(endpoint, groupName string) ([]string, error) {
+	allGroups, err := c.ListGroups()
+	if err != nil {
+		return nil, err
+	}
+	exists := false
+	for _, g := range allGroups {
+		if g.Name == groupName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return nil, fmt.Errorf("DeviceOn-EIM: group %q does not exist", groupName)
+	}
+
 	current, err := c.GroupsOfDevice(endpoint)
 	if err != nil {
 		return nil, err
@@ -549,7 +515,7 @@ func (c *Client) GetInstalledLinuxPackages(agentID string) ([]InstalledLinuxPack
 
 	var pkgs []InstalledLinuxPackage
 	if err := json.Unmarshal([]byte(cr.Content.Value), &pkgs); err != nil {
-		return nil, fmt.Errorf("apphub: decode installed linux packages: %w", err)
+		return nil, fmt.Errorf("DeviceOn-EIM: decode installed linux packages: %w", err)
 	}
 	return pkgs, nil
 }
@@ -1012,35 +978,114 @@ func (c *Client) Shutdown(agentID string) error {
 // SetVolume sets the device's system audio volume (0-100).
 //
 // NOTE: unlike Reboot/Shutdown, this action is not documented in
-// AppHub-v2.3.0.md. It is inferred from the legacy "audio" action handled
-// by DeviceLink's PluginsServlet and sent over the same devicecontrol
-// resource. Verify against your device firmware before relying on it.
+// AppHub-v2.3.0.md. The action key is "set_audio" - confirmed against a
+// live server after an earlier "audio" key was found (via a real bug
+// report) to return {"status":"CHANGED"} without actually changing
+// anything on the device.
 func (c *Client) SetVolume(agentID string, volume int) error {
-	return c.execAction(agentID, map[string]interface{}{"audio": volume})
+	return c.execAction(agentID, map[string]interface{}{"set_audio": volume})
 }
 
 // SetBacklight sets the device's screen backlight/brightness (0-100).
 //
 // NOTE: unlike Reboot/Shutdown, this action is not documented in
-// AppHub-v2.3.0.md. It is inferred from the legacy "brightness" action
-// handled by DeviceLink's PluginsServlet and sent over the same
-// devicecontrol resource. Verify against your device firmware before
-// relying on it.
+// AppHub-v2.3.0.md. The action key is "set_brightness" - confirmed against
+// a live server after an earlier "brightness" key was found (via a real
+// bug report) to return {"status":"CHANGED"} without actually changing
+// anything on the device.
 func (c *Client) SetBacklight(agentID string, brightness int) error {
-	return c.execAction(agentID, map[string]interface{}{"brightness": brightness})
+	return c.execAction(agentID, map[string]interface{}{"set_brightness": brightness})
 }
 
-// batchDevicecontrolPath is the group counterpart of devicecontrolPath: see
-// AppHub-v2.3.0.md "PUT send command-向批量设备发送命令"
-// (PUT /api/plugins/batch/{groupname}/40008/0/27601).
-func batchDevicecontrolPath(groupName string) string {
-	return fmt.Sprintf("/api/plugins/batch/%s/40008/0/27601", url.PathEscape(groupName))
+// GetVolume returns the device's current system audio volume (0-100), as
+// last recorded by SetVolume - nil if unavailable.
+//
+// NOTE: not documented in AppHub-v2.3.0.md. Confirmed against a live
+// server that this reflects whatever SetVolume last recorded, but not
+// confirmed whether it reflects the actual physical hardware volume on
+// every device model (some devices may accept and record the value
+// without applying it to real hardware).
+func (c *Client) GetVolume(agentID string) (*float64, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_audio':true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	// The response wraps the value under a "get_audio" key (echoing the
+	// action name) - unlike get_brightness, which wraps it under
+	// "brightness" instead of "get_brightness". Both confirmed against a
+	// live server.
+	var resp struct {
+		Volume FlexibleNumber `json:"get_audio"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode volume: %w", err)
+	}
+	return resp.Volume.Value, nil
+}
+
+// GetBacklight returns the device's current screen backlight/brightness
+// (0-100), as last recorded by SetBacklight - nil if unavailable.
+//
+// NOTE: not documented in AppHub-v2.3.0.md. Confirmed against a live
+// server that this reflects whatever SetBacklight last recorded, but not
+// confirmed whether it reflects the actual physical hardware brightness
+// on every device model (some devices may accept and record the value
+// without applying it to real hardware).
+func (c *Client) GetBacklight(agentID string) (*float64, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_brightness':true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	var resp struct {
+		Brightness FlexibleNumber `json:"brightness"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode brightness: %w", err)
+	}
+	return resp.Brightness.Value, nil
 }
 
 // execActionGroup sends a devicecontrol action to every device in groupName
 // (optionally further filtered to devices matching labelName, which may be
 // empty).
+//
+// This resolves groupName/labelName to a concrete list of device endpoints
+// via ListDevicesByCondition, then executes the action against all of them
+// in one call via /api/plugins/batchExec/40008/0/27601 (documented in
+// AppHub-v2.3.0.md as "PUT 指定批量设备立即关机", body
+// {"clientIds":[...],"value":...} - note the doc's own example body has a
+// typo, "cliendIds"; the real parameter is "clientIds", confirmed against
+// a live server).
+//
+// AppHub-v2.3.0.md also documents a simpler-looking
+// PUT /api/plugins/batch/{groupname}/40008/0/27601 that takes a groupname
+// directly with no client-side resolution step - that was this function's
+// first implementation, but it was found (via a real bug report - it
+// consistently returns an empty-bodied HTTP 500 for every payload tried,
+// reproduced independently against a second server) to not actually work,
+// so this now goes through batchExec instead.
 func (c *Client) execActionGroup(groupName string, actions map[string]interface{}, labelName string) error {
+	devices, err := c.ListDevicesByCondition(nil, groupName, "", labelName)
+	if err != nil {
+		return err
+	}
+	if len(devices) == 0 {
+		if labelName != "" {
+			return fmt.Errorf("DeviceOn-EIM: no devices found in group %q with label %q", groupName, labelName)
+		}
+		return fmt.Errorf("DeviceOn-EIM: no devices found in group %q", groupName)
+	}
+	clientIDs := make([]string, len(devices))
+	for i, d := range devices {
+		clientIDs[i] = d.Endpoint
+	}
+
 	actionsBytes, err := json.Marshal(actions)
 	if err != nil {
 		return err
@@ -1054,9 +1099,9 @@ func (c *Client) execActionGroup(groupName string, actions map[string]interface{
 		return err
 	}
 
-	body := execActionGroupRequest{ID: devicecontrolResourceID, Value: string(valueBytes), LabelName: labelName}
+	body := execBatchRequest{ClientIDs: clientIDs, Value: string(valueBytes)}
 	var sr statusResponse
-	return c.do(http.MethodPut, batchDevicecontrolPath(groupName), body, &sr)
+	return c.do(http.MethodPut, "/api/plugins/batchExec/40008/0/27601", body, &sr)
 }
 
 // RebootGroup immediately reboots every device in groupName.
@@ -1072,13 +1117,13 @@ func (c *Client) ShutdownGroup(groupName, labelName string) error {
 // SetVolumeGroup sets the system audio volume (0-100) on every device in
 // groupName. See the NOTE on SetVolume - undocumented, best effort.
 func (c *Client) SetVolumeGroup(groupName string, volume int, labelName string) error {
-	return c.execActionGroup(groupName, map[string]interface{}{"audio": volume}, labelName)
+	return c.execActionGroup(groupName, map[string]interface{}{"set_audio": volume}, labelName)
 }
 
 // SetBacklightGroup sets the screen backlight/brightness (0-100) on every
 // device in groupName. See the NOTE on SetBacklight - undocumented, best effort.
 func (c *Client) SetBacklightGroup(groupName string, brightness int, labelName string) error {
-	return c.execActionGroup(groupName, map[string]interface{}{"brightness": brightness}, labelName)
+	return c.execActionGroup(groupName, map[string]interface{}{"set_brightness": brightness}, labelName)
 }
 
 // getPluginAction issues a devicecontrol "read" action against resource
@@ -1118,7 +1163,7 @@ func (c *Client) GetBoardInfo(agentID string) (*BoardInfo, error) {
 
 	var raw rawBoardInfo
 	if err := json.Unmarshal(cr.Content.Value, &raw); err != nil {
-		return nil, fmt.Errorf("apphub: decode board info: %w", err)
+		return nil, fmt.Errorf("DeviceOn-EIM: decode board info: %w", err)
 	}
 	return raw.normalize(), nil
 }
@@ -1142,7 +1187,7 @@ func (c *Client) GetMonitoredProcesses(agentID string) ([]MonitoredProcess, erro
 
 	var rawProcesses []rawMonitoredProcess
 	if err := json.Unmarshal([]byte(raw), &rawProcesses); err != nil {
-		return nil, fmt.Errorf("apphub: decode monitored processes: %w", err)
+		return nil, fmt.Errorf("DeviceOn-EIM: decode monitored processes: %w", err)
 	}
 	for _, p := range rawProcesses {
 		processes = append(processes, p.normalize())
@@ -1163,7 +1208,7 @@ func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
 
 	var m map[string]rawThresholdSetting
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return nil, fmt.Errorf("apphub: decode thresholds: %w", err)
+		return nil, fmt.Errorf("DeviceOn-EIM: decode thresholds: %w", err)
 	}
 
 	for _, metric := range thresholdMetrics {
@@ -1189,7 +1234,7 @@ func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
 // network_download_speed.
 func (c *Client) SetThreshold(agentID, metric string, enabled bool, warn, errorLevel float64) error {
 	if !settableThresholdMetrics[metric] {
-		return fmt.Errorf("apphub: unsupported threshold metric %q", metric)
+		return fmt.Errorf("DeviceOn-EIM: unsupported threshold metric %q", metric)
 	}
 	entry := map[string]interface{}{
 		metric:  enabled,
@@ -1201,87 +1246,66 @@ func (c *Client) SetThreshold(agentID, metric string, enabled bool, warn, errorL
 	})
 }
 
-// SetMonitorEnabled turns the device's overall hardware monitoring
-// (CPU/memory/storage/network/battery threshold alerting) on or off.
-func (c *Client) SetMonitorEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{"set_isMonitor": enabled})
-}
-
-// ListProcesses returns the running processes/threads on a Windows or Linux
-// device, including whether each is currently being monitored.
-func (c *Client) ListProcesses(agentID string) ([]ProcessInfo, error) {
-	raw, err := c.getPluginAction(agentID, `{'get_software_info':true}`)
+// GetDockerInfo returns the Docker containers on a device that are
+// currently selected for monitoring (IsMonitor == "true"). The
+// devicecontrol "get_docker_info" action itself returns every container
+// regardless of monitor status; this filters to the monitored subset.
+func (c *Client) GetDockerInfo(agentID string) ([]DockerContainer, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_docker_info':true}`)
 	if err != nil {
 		return nil, err
 	}
+	containers := make([]DockerContainer, 0)
 	if raw == "" {
-		return []ProcessInfo{}, nil
+		return containers, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &containers); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode docker info: %w", err)
 	}
 
-	var procs []ProcessInfo
-	if err := json.Unmarshal([]byte(raw), &procs); err != nil {
-		return nil, fmt.Errorf("apphub: decode process list: %w", err)
+	monitored := make([]DockerContainer, 0, len(containers))
+	for _, container := range containers {
+		if container.IsMonitor == "true" {
+			monitored = append(monitored, container)
+		}
 	}
-	return procs, nil
+	return monitored, nil
 }
 
-// SetProcessMonitorEnabled turns application/process monitoring on or off.
-func (c *Client) SetProcessMonitorEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{"set_isProcessMonitor": enabled})
-}
-
-// GetDockerInfo returns the Docker compose/swarm/image groups deployed on a
-// device, including each container's running status.
-func (c *Client) GetDockerInfo(agentID string) ([]DockerGroup, error) {
-	path := fmt.Sprintf("/api/devicemgr/%s/60001/0/27300", url.PathEscape(agentID))
-	var cr contentResponse
-	if err := c.do(http.MethodGet, path, nil, &cr); err != nil {
-		return nil, err
-	}
-	if cr.Content.Value == "" {
-		return []DockerGroup{}, nil
-	}
-
-	var resp dockerInfoResponse
-	if err := json.Unmarshal([]byte(cr.Content.Value), &resp); err != nil {
-		return nil, fmt.Errorf("apphub: decode docker info: %w", err)
-	}
-	return resp.Data, nil
-}
-
-// SetDockerMonitorEnabled turns Docker container monitoring on or off.
-func (c *Client) SetDockerMonitorEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{"set_isDockerMonitor": enabled})
-}
-
-// GetUSBMonitorEnabled reports whether USB peripheral change monitoring
-// (alerting on USB connect/disconnect) is enabled.
+// GetUSBMonitorEnabled reports whether USB storage device access is
+// currently enabled on the device. Confirmed against a live server via a
+// real packet capture; the response may be an empty object on devices
+// that don't report current status, in which case this returns false.
 func (c *Client) GetUSBMonitorEnabled(agentID string) (bool, error) {
-	raw, err := c.getPluginAction(agentID, `{'get_usb_change':true}`)
+	raw, err := c.getPluginAction(agentID, `{'get_usb_storage_status':true}`)
 	if err != nil {
 		return false, err
 	}
-	if raw == "" {
+	if raw == "" || raw == "{}" {
 		return false, nil
 	}
 
 	var m map[string]string
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return false, fmt.Errorf("apphub: decode usb monitor status: %w", err)
+		return false, fmt.Errorf("DeviceOn-EIM: decode usb monitor status: %w", err)
 	}
-	return m["get_usb_change"] == "true", nil
+	return m["get_usb_storage_status"] == "true", nil
 }
 
-// SetUSBMonitorEnabled turns USB peripheral change monitoring on or off.
+// SetUSBMonitorEnabled enables or disables USB storage device access on
+// the device. Confirmed against a live server via a real packet capture -
+// the server logs this action under the friendly audit-log event names
+// "enableUsb"/"disableUsb" (unlike most actions, which are logged as raw
+// JSON), confirming it's a recognized, meaningful action rather than an
+// inert passthrough.
+//
+// NOTE: an earlier version instead sent "set_peripheral_monitor"/
+// "usb_change" (based on an incorrect assumption that this was a USB
+// connect/disconnect alert toggle) - that action was logged as raw JSON
+// in the audit trail rather than a friendly event name, suggesting the
+// server didn't specially recognize it either.
 func (c *Client) SetUSBMonitorEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{
-		"set_peripheral_monitor": []map[string]interface{}{{"usb_change": enabled}},
-	})
-}
-
-// SetUSBStorageEnabled enables or disables USB mass-storage access on the device.
-func (c *Client) SetUSBStorageEnabled(agentID string, enabled bool) error {
-	return c.execAction(agentID, map[string]interface{}{"usb_storage_status": enabled})
+	return c.execAction(agentID, map[string]interface{}{"set_usb_storage_status": enabled})
 }
 
 // SetSystemLogMonitorEnabled turns systemd log collection/reporting on or
@@ -1334,55 +1358,51 @@ func (c *Client) ListOperationRecords(currentPage, limit int, target string, beg
 	return page.Data, nil
 }
 
-// DeleteOperationRecord deletes a single operation record by id.
-func (c *Client) DeleteOperationRecord(id int64) error {
-	return c.do(http.MethodDelete, fmt.Sprintf("/api/records/%d", id), nil, nil)
-}
-
 // DeleteAllOperationRecords clears every operation record.
 func (c *Client) DeleteAllOperationRecords() error {
 	return c.do(http.MethodDelete, "/api/records/all", nil, nil)
 }
 
-// BatchDeleteOperationRecords deletes multiple operation records by id.
-func (c *Client) BatchDeleteOperationRecords(ids []int64) error {
-	return c.do(http.MethodPost, "/api/records/batchDelete", batchIDsRequest{IDs: ids}, nil)
-}
+// --- system log --------------------------------------------------------------
 
-// --- agent (client) log ------------------------------------------------------
-
-// RequestAgentLogUpload asks a device's agent to upload its client log to
-// callbackURL (must be an address the device can reach, running an HTTP
-// server that accepts the agent's upload - this CLI does not provide one).
-// actionID should be a fresh unique string; poll GetAgentLogStatus with the
-// same value, then call DownloadAgentLog once it reports "success".
-func (c *Client) RequestAgentLogUpload(agentID, callbackURL, actionID string) error {
-	valueBytes, err := json.Marshal(agentLogRequestValue{Address: callbackURL, ActionID: actionID})
-	if err != nil {
-		return err
-	}
-	path := fmt.Sprintf("/api/devicemgr/%s/40001/0/27012", url.PathEscape(agentID))
-	body := execActionRequest{ID: 27012, Value: string(valueBytes)}
-	var sr statusResponse
-	return c.do(http.MethodPut, path, body, &sr)
-}
-
-// GetAgentLogStatus polls the status of a previously requested agent log
-// upload (see RequestAgentLogUpload).
-func (c *Client) GetAgentLogStatus(actionID string) (*logStatusResponse, error) {
+// ListSystemLogs returns a page of device system log entries (fed by
+// SetSystemLogMonitorEnabled turning collection on for that device). Any
+// of deviceID, os, keywords, mode, level may be empty to leave that filter
+// unset; beginTs/endTs are Unix milliseconds, pass 0 to omit either bound.
+//
+// NOTE: not documented in AppHub-v2.3.0.md. The path is /api/systemLog/
+// byPage (capital P) - confirmed against a live server via a real packet
+// capture; an earlier version of this client used the lowercase
+// /api/systemLog/bypage, which the server rejects with an HTTP 400
+// "Invalid path" error.
+func (c *Client) ListSystemLogs(currentPage, limit int, deviceID, os, keywords, mode, level string, beginTs, endTs int64) ([]SystemLogEntry, error) {
 	q := url.Values{}
-	q.Set("actionId", actionID)
-	var status logStatusResponse
-	if err := c.do(http.MethodGet, "/api/devicemgr/logStatus?"+q.Encode(), nil, &status); err != nil {
+	q.Set("currentpage", fmt.Sprintf("%d", currentPage))
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("keywords", keywords)
+	q.Set("agentId", deviceID)
+	q.Set("os", os)
+	q.Set("mode", mode)
+	q.Set("level", level)
+	if beginTs > 0 {
+		q.Set("beginTs", fmt.Sprintf("%d", beginTs))
+	} else {
+		q.Set("beginTs", "")
+	}
+	if endTs > 0 {
+		q.Set("endTs", fmt.Sprintf("%d", endTs))
+	} else {
+		q.Set("endTs", "")
+	}
+
+	var page systemLogsPageResponse
+	if err := c.do(http.MethodGet, "/api/systemLog/byPage?"+q.Encode(), nil, &page); err != nil {
 		return nil, err
 	}
-	return &status, nil
+	return page.Data, nil
 }
 
-// DownloadAgentLog downloads a device's uploaded client log (see
-// RequestAgentLogUpload/GetAgentLogStatus) as a zip/log file. The server
-// deletes the file after serving it, so it can only be downloaded once.
-func (c *Client) DownloadAgentLog(agentID string) ([]byte, error) {
-	path := fmt.Sprintf("/api/devicemgr/agentLog/%s", url.PathEscape(agentID))
-	return c.downloadFile(path)
+// DeleteSystemLogsByDevice deletes every system log entry for a device.
+func (c *Client) DeleteSystemLogsByDevice(deviceID string) error {
+	return c.do(http.MethodPost, "/api/systemLog/deleteByDeviceId", deleteByDeviceIDRequest{DeviceID: deviceID}, nil)
 }

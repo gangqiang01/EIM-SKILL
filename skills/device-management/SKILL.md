@@ -1,6 +1,6 @@
 ---
 name: device-management
-description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceOn-EIM, and control individual devices - reboot, shutdown, set volume/backlight, enable/disable USB storage, trigger a time sync, add a device to a group, or delete a device. Use this whenever the user asks to look up, list, group, or remotely control an AppHub-managed device via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、禁用U盘/USB存储、时间同步。
+description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceOn-EIM, and control individual devices - reboot, shutdown, set volume/backlight, trigger a time sync, add a device to a group, or delete a device. Use this whenever the user asks to look up, list, group, or remotely control a DeviceOn-EIM-managed device via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、时间同步。
 ---
 
 # Device management
@@ -9,7 +9,7 @@ Wraps DeviceOn-EIM's device management REST API as `eim-skill device
 ...` / `eim-skill group ...` commands. Requires `eim-skill` to be built
 (`make` in the repo root) and `conf/config.yaml` (or `--base-url
 --username --password` flags / `EIM_*` env vars) pointing at a reachable
-AppHub server.
+DeviceOn-EIM server.
 
 ## When to use this skill
 
@@ -20,11 +20,11 @@ AppHub server.
 - "What's the online devices' health breakdown (normal/warning/error)" / "在线设备的状态" → `device health`
 - "What's the status/detail of device X" / "查看设备X的详情" → `device get`
 - "What are device X's cpu/memory/storage/network specs" / "查看设备X的CPU/内存/存储/网络信息" → `device details`
-- "Reboot / shut down device X" / "重启设备X" / "关闭设备X" / "设备关机" → `device reboot` / `device shutdown`
+- "Reboot / shut down device X" / "重启设备X" / "关闭设备X" / "设备关机" → confirm with the user first, then `device reboot` / `device shutdown`
 - "Turn the volume/screen brightness up/down on device X" / "设置设备X的音量" / "设置设备X的背光/亮度" → `device set-volume` / `device set-backlight`
-- "Reboot / shut down every device in group Y" / "重启设备组Y下所有设备" / "给设备组Y批量关机" → `device reboot-group` / `device shutdown-group`
+- "What's device X's current volume/backlight set to?" / "查看设备X当前的音量/背光" → `device get-volume` / `device get-backlight`
+- "Reboot / shut down every device in group Y" / "重启设备组Y下所有设备" / "给设备组Y批量关机" → confirm with the user first (state how many/which devices this affects), then `device reboot-group` / `device shutdown-group`
 - "Set the volume/brightness for every device in group Y" / "给设备组Y批量设置音量/背光" → `device set-volume-group` / `device set-backlight-group`
-- "Disable the USB port on device X" (data-leak-prevention style request) / "禁用设备X的U盘/USB存储" → `device usb set-storage`
 - "Sync the clock on device X" / "同步设备X的时间" → `device sync-time`
 - "Add device X to group Y" / "delete device X" / "把设备X添加到设备组Y" / "删除设备X" → `device add-to-group` / `device delete`
 - "What device groups exist" / "查询所有设备组" → `group list`
@@ -53,13 +53,14 @@ eim-skill group create <name> <type> [description] [--creator <username>]
 
 eim-skill device reboot <endpoint-or-name>
 eim-skill device shutdown <endpoint-or-name>
+eim-skill device get-volume <endpoint-or-name>
 eim-skill device set-volume <endpoint-or-name> <0-100>
+eim-skill device get-backlight <endpoint-or-name>
 eim-skill device set-backlight <endpoint-or-name> <0-100>
 eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
 eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
 eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
 eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
-eim-skill device usb set-storage <endpoint-or-name> <on|off>     # unverified, see caveat below
 eim-skill device sync-time <endpoint-or-name>
 ```
 
@@ -69,6 +70,16 @@ every device-targeting command resolves it against the live device list.
 
 ## Notes and caveats
 
+- **Always confirm with the user before running `device reboot`,
+  `device shutdown`, `device reboot-group`, or `device shutdown-group`.**
+  These interrupt a running device (or every device in a group)
+  immediately, take effect whether or not anything important is running
+  on it, and can't be undone once issued. Before calling any of them,
+  state plainly what you're about to do and to which device(s) - for the
+  `-group` variants, resolve and state how many/which devices are
+  affected (e.g. via `device list --group <name>`) - and wait for
+  explicit confirmation. Do not reboot/shut down as a side effect of a
+  broader request unless the user asked for exactly that.
 - Every device object from `device list`/`device get` includes
   `deviceStatusText` (`"normal"`/`"warning"`/`"error"`) alongside the raw
   numeric `deviceStatus` (0/1/2, the same code `device list --alarm`
@@ -82,23 +93,38 @@ every device-targeting command resolves it against the live device list.
   any one of them. "Alarm" means the device's combined status
   (`deviceStatus`) is not 0/normal - it's 1 (error) or 2 (warning) on
   either the software or hardware side.
-- `set-volume`, `set-backlight`, and `sync-time` are not documented in
-  AppHub-v2.3.0.md; they're inferred from DeviceLink's `PluginsServlet`
-  Java source (the same devicecontrol resource used for the documented
-  reboot/shutdown actions). Verify against real device firmware before
-  relying on them in an unattended workflow.
-- `usb set-storage` is similarly undocumented and additionally unverified:
-  its sibling read command (`usb get-storage`) was removed after live
-  testing showed the server didn't recognize the guessed action name it
-  queried (it silently returned an empty result instead of a real flag),
-  so this write-side action name may be equally wrong - confirm it
-  actually changes device behavior before relying on it.
+- `get-volume`/`set-volume` and `get-backlight`/`set-backlight` use the
+  `get_audio`/`set_audio` and `get_brightness`/`set_brightness`
+  devicecontrol actions (same resource as the documented reboot/shutdown
+  actions), all confirmed against a live server - an earlier version of
+  `set-volume`/`set-backlight` used the wrong keys `audio`/`brightness`,
+  which returned success without actually changing anything, fixed via a
+  real bug report. `get-volume`/`get-backlight` reflect whatever the
+  matching `set-*` command last recorded server-side - not confirmed
+  whether that always matches the actual physical hardware value on every
+  device model. `sync-time` is not documented in AppHub-v2.3.0.md and
+  hasn't been verified against real
+  firmware - verify before relying on it in an unattended workflow.
+- `set-volume`/`set-backlight`/`set-volume-group`/`set-backlight-group`
+  reject values outside 0-100 client-side - the server accepts and
+  returns success for out-of-range values without erroring (confirmed via
+  a real bug report), so this CLI validates before sending the request.
+- `add-to-group` checks that group-name exists (via `group list`) before
+  adding the device - the underlying server endpoint otherwise silently
+  accepts and records a nonexistent group name (confirmed via a real bug
+  report).
 - `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
-  target every device in a group in one call (documented in
-  AppHub-v2.3.0.md as "PUT send command-向批量设备发送命令",
-  `/api/plugins/batch/{groupname}/40008/0/27601`) rather than looping over
+  target every device in a group in one call, rather than looping over
   `device list --group` and calling the single-device command per device.
-  `--label` optionally narrows the target to devices carrying that label.
+  They resolve the group (and `--label`, if given) to device endpoints
+  client-side, then execute against all of them via AppHub-v2.3.0.md's
+  documented batch-execute resource (`/api/plugins/batchExec/40008/0/27601`,
+  body `{"clientIds":[...],"value":...}`). `--label` optionally narrows
+  the target to devices carrying that label. (A simpler-looking documented
+  endpoint that takes the group name directly in the URL,
+  `/api/plugins/batch/{groupname}/40008/0/27601`, was tried first but
+  reliably returns an empty-bodied HTTP 500 on real servers - confirmed via
+  a real bug report and reproduced independently - so it's not used.)
 - `device details` is also undocumented (found in `ClientServlet`'s
   `get_1_details`) - it's a lighter-weight call than `device get` when you
   only need the system-info blob, not the full device record (online

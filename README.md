@@ -49,7 +49,9 @@ eim-skill device monitor <endpoint-or-name> --type cpu|memory      # get cpu/mem
   [--last <30m|12h|3d>]                                            # optionally restrict to a recent time window
 eim-skill device reboot <endpoint-or-name>                         # reboot a device now
 eim-skill device shutdown <endpoint-or-name>                       # shut down a device now
+eim-skill device get-volume <endpoint-or-name>                     # get last-recorded audio volume
 eim-skill device set-volume <endpoint-or-name> <0-100>             # set audio volume
+eim-skill device get-backlight <endpoint-or-name>                  # get last-recorded screen backlight
 eim-skill device set-backlight <endpoint-or-name> <0-100>          # set screen backlight
 eim-skill device reboot-group <group-name> [--label <name>]        # reboot every device in a group
 eim-skill device shutdown-group <group-name> [--label <name>]      # shut down every device in a group
@@ -70,17 +72,40 @@ Every device object returned by `device list`/`device get` includes
 raw numeric `deviceStatus` (0/1/2) - the same code `device list --alarm`
 filters on, translated so you don't have to know the mapping.
 
-`set-volume` and `set-backlight` are not documented in DeviceOn-EIM-v2.3.0.md;
-they are implemented on the same devicecontrol resource as reboot/shutdown,
-inferred from DeviceOn-EIM's `PluginsServlet` source. Verify against your
-device firmware before relying on them in production.
+`get-volume`/`set-volume` and `get-backlight`/`set-backlight` are not
+documented in DeviceOn-EIM-v2.3.0.md; they use the same devicecontrol
+resource as reboot/shutdown, with action keys `get_audio`/`set_audio` and
+`get_brightness`/`set_brightness`, all confirmed against a live server (an
+earlier version of the `set-*` commands used the wrong keys
+`audio`/`brightness`, which returned success without actually changing
+anything - fixed via a real bug report). `get-volume`/`get-backlight`
+reflect whatever the matching `set-*` command last recorded server-side -
+not confirmed whether that always matches the actual physical hardware
+value on every device model. `set-volume`/`set-backlight`/
+`set-volume-group`/`set-backlight-group` reject values outside 0-100
+client-side - the server accepts and returns success for out-of-range
+values without erroring, confirmed via a real bug report.
+
+`add-to-group` checks that `<group>` exists (via `group list`) before
+adding the device - the underlying server endpoint otherwise silently
+accepts and records a nonexistent group name, confirmed via a real bug
+report.
 
 `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
-target every device in a group with a single call, using DeviceOn-EIM's documented
-group-batch devicecontrol resource (`PUT
-/api/plugins/batch/{groupname}/40008/0/27601`) rather than looping over each
-device individually. `--label` optionally narrows the target to devices
+target every device in a group with a single call: they resolve the group
+(and `--label`, if given) to device endpoints client-side, then execute
+the action against all of them in one request to DeviceOn-EIM's
+documented batch-execute resource (`PUT
+/api/plugins/batchExec/40008/0/27601`, body `{"clientIds":[...],
+"value":...}`). `--label` optionally narrows the target to devices
 carrying that label.
+
+An earlier implementation instead called a simpler-looking documented
+endpoint that takes the group name directly in the URL (`PUT
+/api/plugins/batch/{groupname}/40008/0/27601`), but that was found - via a
+real bug report, reproduced independently against a second server - to
+reliably fail with an empty-bodied HTTP 500 for any payload, so these
+commands now resolve the group to specific devices first instead.
 
 `device details` is also undocumented (found in `ClientServlet`'s
 `get_1_details`); it's a lighter-weight call than `device get` when you
@@ -98,33 +123,79 @@ normalizes them into a single object with clear field names.
 ```
 eim-skill device get-monitor <endpoint-or-name>                      # cpu/memory/storage/battery/network snapshot
 
-eim-skill device set-monitor <endpoint-or-name> <on|off>            # overall hw monitoring on/off
-
 eim-skill device threshold get <endpoint-or-name>                   # current threshold config
 eim-skill device threshold set <endpoint-or-name> <metric> <on|off> # configure one metric
   [--warn <n>] [--error <n>]
   # metric: cpu_temp, cpu_usage, memory_usage, storage_usage,
   #         battery_available, network_upload_speed, network_download_speed
 
-eim-skill device process list <endpoint-or-name>                    # running processes + monitor status
 eim-skill device process monitored <endpoint-or-name>               # processes currently selected for monitoring
-eim-skill device process set-monitor <endpoint-or-name> <on|off>    # app/process monitoring on/off
 
-eim-skill device docker info <endpoint-or-name>                     # deployed docker groups/containers
-eim-skill device docker set-monitor <endpoint-or-name> <on|off>     # docker monitoring on/off
+eim-skill device docker monitored <endpoint-or-name>                 # docker containers currently selected for monitoring
 
-eim-skill device usb get-monitor <endpoint-or-name>                 # is USB change monitoring on?
-eim-skill device usb set-monitor <endpoint-or-name> <on|off>        # USB change monitoring on/off
-eim-skill device usb set-storage <endpoint-or-name> <on|off>        # allow/deny USB mass-storage access (unverified)
+eim-skill device usb get-monitor <endpoint-or-name>                 # is USB storage device access enabled?
+eim-skill device usb set-monitor <endpoint-or-name> <on|off>        # USB storage device access on/off
 ```
 
 This mirrors the DeviceOn-EIM web console's "monitorAlert" feature: CPU,
 memory, storage and network are monitored via configurable warn/error
 thresholds (`device threshold`) rather than a live dashboard feed - pair
 this with `device monitor --type cpu|memory` for historical CPU/memory
-samples, or `device get-monitor` for a live snapshot (see below). Process
-and Docker monitoring here cover the on/off toggle only; the web
-console's per-process/per-container selection isn't wired up yet.
+samples, or `device get-monitor` for a live snapshot (see below).
+
+`device threshold set` only overwrites `--warn`/`--error` when you pass
+them. If either is omitted (e.g. just toggling a metric on/off), it first
+fetches that metric's current warn/error levels via `device threshold
+get` and resends those unchanged - the underlying `set_threshold`
+devicecontrol action requires both warn and error on every request, and
+an earlier version sent `0` for whichever flag was omitted, which
+silently zeroed out any existing threshold on every on/off toggle
+(confirmed via a real bug report and packet capture).
+
+There is no `device set-monitor` (overall hardware monitoring on/off) -
+it used the `set_isMonitor` devicecontrol action and has been removed;
+`device threshold set` already lets you disable alerting per-metric.
+There is also no `device process set-monitor`/`device docker
+set-monitor`: they used the `set_isProcessMonitor`/
+`set_isDockerMonitor` devicecontrol actions and were confirmed against a
+live server to return success without actually changing anything, so
+they were removed rather than shipped non-functional.
+
+There is also no `device process list` (every process regardless of
+monitor status) - only `device process monitored` remains, which already
+covers the practical use case. `device docker monitored` is now the Docker
+analogue of `device process monitored`: it returns only the containers
+currently selected for monitoring (`ismonitor == true`), not every
+deployed container. An earlier version instead read from an undocumented
+LwM2M resource (`.../60001/0/27300`) assuming a response grouped by
+compose project - that returned an empty result on a live server with
+real containers deployed, so it was switched to the working
+devicecontrol `get_docker_info` action (confirmed via a real packet
+capture) and filtered to the monitored subset client-side, matching
+`device process monitored`'s shape/intent.
+
+`device usb get-monitor`/`set-monitor` control whether USB storage
+devices (e.g. a USB flash drive) can be used on the device - not USB
+connect/disconnect alerting, as an earlier version assumed. They use the
+`get_usb_storage_status`/`set_usb_storage_status` devicecontrol actions,
+confirmed against a live server via a real packet capture; `set-monitor`
+was additionally cross-checked in `log operations list`'s audit trail,
+where it's logged under the friendly event names `enableUsb`/
+`disableUsb` (most actions are logged as raw JSON instead), confirming
+the server specially recognizes it as a real, meaningful action. An
+earlier version instead used `get_usb_change`/`set_peripheral_monitor`
+(alert on USB connect/disconnect) - that `set_peripheral_monitor` calls
+were logged as raw unrecognized JSON in the same audit trail was a strong
+signal it wasn't a real action either, so it was replaced. Some devices
+return an empty result for `get_usb_storage_status` rather than a
+definite value; this CLI normalizes that to `enabled: false`.
+
+`device monitor`'s `value` is the usage percentage (0-100) for whichever
+`--type` you asked for - CPU usage % for `--type cpu`, memory usage % for
+`--type memory` (inferred from observed values matching
+`device get-monitor`'s `cpu.usage_percent`/`memory.usage_percent`, not a
+spec). It's parsed leniently (JSON number or numeric string, both
+normalized) since some servers report it as a string.
 
 `device get-monitor` is not documented in DeviceOn-EIM-v2.3.0.md (found by
 inspecting real traffic to the `get_board_info` devicecontrol action). Its
@@ -139,40 +210,32 @@ doc comment in `internal/DeviceOn-EIM/types.go`.
 devicecontrol action, found the same way) and normalized similarly -
 `threadcpuloading`/`threadmemloading` become numeric `cpu_percent`/
 `mem_percent`, `threadismonitor` becomes a real `is_monitored` boolean.
-Its per-item field shape is inferred by analogy with the confirmed
-`device process list` shape (same underlying subsystem) rather than
-verified against a populated list - see the `MonitoredProcess` doc
-comment in `internal/DeviceOn-EIM/types.go`.
+Its per-item field shape is inferred by analogy with the sibling
+`get_software_info` action (same underlying process-monitor subsystem)
+rather than verified against a populated list - see the
+`MonitoredProcess` doc comment in `internal/DeviceOn-EIM/types.go`.
 
-`device usb set-storage` is undocumented and unverified: its sibling read
-command (`usb get-storage`) queried a guessed action name and was removed
-after live testing showed the server didn't recognize it (it silently
-returned an empty result instead of a real flag) - this write-side action
-name may be equally wrong. Confirm it actually changes device behavior
-before relying on it in any unattended workflow.
 
 ### Logs and operation records
 
 ```
 eim-skill log system set-monitor <endpoint-or-name> <on|off>       # turn system log collection/reporting on or off
 
-eim-skill log operations list [--limit N] [--target <substr>] [--last <30m|12h|3d>]
-eim-skill log operations delete <id>
-eim-skill log operations delete-all
-eim-skill log operations batch-delete <id> [id...]
+eim-skill log system list [--device-id <endpoint-or-name>] [--os <os>] [--keywords <substr>]
+                           [--mode <mode>] [--level <level>] [--limit N] [--last <30m|12h|3d>]
+eim-skill log system delete-by-device <endpoint-or-name>
 
-eim-skill log agent request <endpoint-or-name> <callback-url> <action-id>
-eim-skill log agent status <action-id>
-eim-skill log agent download <endpoint-or-name> [--out <file>]
+eim-skill log operations list [--limit N] [--target <substr>] [--last <30m|12h|3d>]
+eim-skill log operations delete-all
 ```
 
-`--last` (on `log operations list` and `device monitor`) takes a relative
-time window instead of raw Unix-millisecond timestamps - e.g. `--last
-30m`, `--last 12h`, `--last 3d` - covering the entries/samples from that
-far back through now; omit it for no time filter. `--limit` (default 20)
-simply caps how many of the most recent entries come back - there's no
-`--page` to think about, since this command always fetches from the start
-of the result set.
+`--last` (on `log system list`, `log operations list`, and `device
+monitor`) takes a relative time window instead of raw Unix-millisecond
+timestamps - e.g. `--last 30m`, `--last 12h`, `--last 3d` - covering the
+entries/samples from that far back through now; omit it for no time
+filter. `--limit` (default 20) simply caps how many of the most recent
+entries come back - there's no `--page` to think about, since this
+command always fetches from the start of the result set.
 
 `log operations` (an audit log of admin actions) is not documented in
 DeviceOn-EIM-v2.3.0.md - it was reverse-engineered from
@@ -185,22 +248,19 @@ string the servlet's naming would suggest).
 captured devicecontrol request using the `set_monitor_data_report`/
 `systemd_log_monitor` action), but confirmed to succeed against a live
 device (its effect is visible afterward in `log operations list`'s audit
-trail). There is currently no command to query the system log entries it
-enables collection of: the documented `/api/systemLog/bypage` endpoint
-returned an HTTP 400 "Invalid path" error from a real server during
-testing (a server-side routing issue, not a request-shape problem - the
-request matched DeviceOn-EIM-v2.3.0.md exactly), so that `list` command
-(and the `delete`/`delete-by-device`/`batch-delete` commands that depended
-on it to discover ids) was removed rather than shipped non-functional.
+trail). A device needs this turned on at least once before `log system
+list` will return anything for it.
 
-Agent/client log retrieval is asynchronous and needs a reachable callback
-server: the DeviceOn-EIM server can't push a file to you directly, so
-`log agent request` asks the device's agent to upload its log to
-`<callback-url>` (which must be an HTTP address the device can reach,
-running a server that accepts the upload - this CLI does not provide
-one). Poll `log agent status` until it reports `"success"`, then
-`log agent download` (works only once - the server deletes the file after
-serving it).
+`log system list` queries the system log entries a device has reported;
+`delete-by-device` clears all of a device's entries at once (there is no
+single-id delete or batch-delete - `delete-by-device` is the only removal
+command). It's also undocumented in DeviceOn-EIM-v2.3.0.md -
+reverse-engineered from a real packet capture, which confirmed the
+endpoint path is `/api/systemLog/byPage` (capital `P`). An earlier version
+of this CLI called the lowercase `/api/systemLog/bypage`, which the server
+rejects with an HTTP 400 "Invalid path" error - that was a bug in this
+client, not a genuine server limitation, and this whole command group had
+been removed as a result before the mistake was found and fixed.
 
 ### OTA deployment
 

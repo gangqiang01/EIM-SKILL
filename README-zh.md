@@ -44,7 +44,9 @@ eim-skill device monitor <endpoint-or-name> --type cpu|memory      # 获取CPU/�
   [--last <30m|12h|3d>]                                            # 可选，限定为最近一段时间
 eim-skill device reboot <endpoint-or-name>                         # 立即重启设备
 eim-skill device shutdown <endpoint-or-name>                       # 立即关闭设备
+eim-skill device get-volume <endpoint-or-name>                     # 获取最后记录的音量
 eim-skill device set-volume <endpoint-or-name> <0-100>             # 设置音量
+eim-skill device get-backlight <endpoint-or-name>                  # 获取最后记录的屏幕背光/亮度
 eim-skill device set-backlight <endpoint-or-name> <0-100>          # 设置屏幕背光/亮度
 eim-skill device reboot-group <group-name> [--label <name>]        # 重启设备组下所有设备
 eim-skill device shutdown-group <group-name> [--label <name>]      # 关闭设备组下所有设备
@@ -65,15 +67,33 @@ eim-skill group create <name> <type> [description] [--creator <username>]  # 创
 `deviceStatus`（0/1/2，也就是 `device list --alarm` 过滤所用的字段）——
 已转换成可读文本，无需自己记忆数字含义。
 
-`set-volume` 和 `set-backlight` 未在 DeviceOn-EIM-v2.3.0.md 中记录；它们
-是基于和重启/关机相同的设备控制接口实现的，从 DeviceOn-EIM 的
-`PluginsServlet` 源码推断而来。生产环境使用前请先在真实设备固件上验证。
+`get-volume`/`set-volume` 和 `get-backlight`/`set-backlight` 未在
+DeviceOn-EIM-v2.3.0.md 中记录；使用和重启/关机相同的设备控制接口，
+动作键为 `get_audio`/`set_audio` 和 `get_brightness`/`set_brightness`，
+均已用真实服务器验证过（此前版本 `set-*` 用的键是错的
+`audio`/`brightness`，虽然返回成功但实际不生效，已根据真实反馈修复）。
+`get-volume`/`get-backlight` 反映的是对应 `set-*` 命令最后一次记录的
+服务端值——并未确认在所有设备型号上都真实对应物理硬件的实际值。
+`set-volume`/`set-backlight`/`set-volume-group`/`set-backlight-group`
+在客户端拒绝 0-100 之外的取值——服务器对超出范围的值也会返回成功而不
+报错，已根据真实反馈确认此问题。
+
+`add-to-group` 会先对照 `group list` 校验 `<group>` 是否存在，不存在
+则报错——否则底层服务器接口会静默接受并记录一个不存在的组名，已根据
+真实反馈确认此问题。
 
 `reboot-group`/`shutdown-group`/`set-volume-group`/`set-backlight-group`
-通过一次调用即可对整个设备组下的所有设备生效，使用的是 DeviceOn-EIM
-文档记录的批量设备控制接口（`PUT
-/api/plugins/batch/{groupname}/40008/0/27601`），而不是对每台设备逐个
-调用。`--label` 可选，用来只对组内带有该标签的设备生效。
+通过一次调用即可对整个设备组下的所有设备生效：先在客户端把 group-name
+（和可选的 --label）解析成具体的设备 endpoint 列表，再通过 DeviceOn-EIM
+文档记录的批量执行接口（`PUT /api/plugins/batchExec/40008/0/27601`，
+请求体为 `{"clientIds":[...],"value":...}`）一次性对这些设备执行动作。
+`--label` 可选，用来只对组内带有该标签的设备生效。
+
+早期实现直接调用了文档里另一个看起来更简单、URL 里直接带组名的接口
+（`PUT /api/plugins/batch/{groupname}/40008/0/27601`），但经真实用户
+反馈、并在另一台服务器上独立复现确认，这个接口对任何请求体都会稳定
+返回一个空内容的 HTTP 500——因此这几个命令现在改为先在客户端把组
+解析成具体设备。
 
 `device details` 同样未文档化（源自 `ClientServlet` 的 `get_1_details`
 接口）；当你只需要agent上报的系统硬件信息（CPU、内存、存储、网卡）而
@@ -89,8 +109,6 @@ eim-skill group create <name> <type> [description] [--creator <username>]  # 创
 ```
 eim-skill device get-monitor <endpoint-or-name>                      # CPU/内存/存储/电池/网络实时快照
 
-eim-skill device set-monitor <endpoint-or-name> <on|off>            # 整体硬件监控总开关
-
 eim-skill device threshold get <endpoint-or-name>                   # 当前阈值配置
 eim-skill device threshold set <endpoint-or-name> <metric> <on|off> # 配置某一项指标
   [--warn <n>] [--error <n>]
@@ -100,24 +118,62 @@ eim-skill device threshold set <endpoint-or-name> <metric> <on|off> # 配置某�
   #   network_upload_speed（网络上传速度）,
   #   network_download_speed（网络下载速度）
 
-eim-skill device process list <endpoint-or-name>                    # 运行中的进程 + 监控状态
 eim-skill device process monitored <endpoint-or-name>               # 当前被选中监控的进程
-eim-skill device process set-monitor <endpoint-or-name> <on|off>    # 应用/进程监控总开关
 
-eim-skill device docker info <endpoint-or-name>                     # 已部署的docker分组/容器
-eim-skill device docker set-monitor <endpoint-or-name> <on|off>     # Docker监控总开关
+eim-skill device docker monitored <endpoint-or-name>                 # 当前被选中监控的docker容器
 
-eim-skill device usb get-monitor <endpoint-or-name>                 # USB变更监控是否开启？
-eim-skill device usb set-monitor <endpoint-or-name> <on|off>        # USB变更监控开关
-eim-skill device usb set-storage <endpoint-or-name> <on|off>        # 允许/禁止USB存储访问（未验证）
+eim-skill device usb get-monitor <endpoint-or-name>                 # USB存储设备访问是否开启？
+eim-skill device usb set-monitor <endpoint-or-name> <on|off>        # USB存储设备访问开关
 ```
 
 这对应的是 DeviceOn-EIM 网页控制台的"monitorAlert"（监控告警）功能：
 CPU、内存、存储、网络是通过可配置的警告/错误阈值（`device threshold`）
 来监控的，而不是实时仪表盘——可以搭配 `device monitor --type cpu|memory`
 查看历史CPU/内存采样，或用 `device get-monitor` 查看实时快照（见下方）。
-这里的进程和Docker监控只支持整体开关；网页控制台那种精确挑选监控哪个
-进程/容器的功能，本CLI暂未实现。
+
+`device threshold set` 只有在你传了 `--warn`/`--error` 时才会覆盖对应的
+值。如果省略了其中任意一个（例如只是切换某个指标的开关），会先通过
+`device threshold get` 查询该指标当前的警告/错误阈值，把原值原样带上
+——底层 `set_threshold` 设备控制动作每次请求都必须同时带上warn和error，
+早期版本对省略的参数直接发送 `0`，导致每次切换开关都会静默把已有的
+阈值清零（已根据真实反馈和抓包确认此问题）。
+
+没有 `device set-monitor`（整体硬件监控总开关）命令——它使用
+`set_isMonitor` 设备控制动作，已被移除；`device threshold set` 已经
+支持按指标单独关闭告警。也没有 `device process set-monitor`/
+`device docker set-monitor` 命令：早期版本曾提供这两个开关（使用
+`set_isProcessMonitor`/`set_isDockerMonitor` 设备控制动作），但已用
+真实服务器验证过——返回成功但实际不生效，因此已移除，而不是保留一个
+实际用不了的功能。
+
+也没有 `device process list`（不论是否被监控、列出全部进程）命令——
+只保留 `device process monitored`，已经覆盖了实际使用场景。
+`device docker monitored` 现在是 Docker 版本的 `device process monitored`：
+只返回当前被选中监控的容器（`ismonitor == true`），而不是所有已部署的
+容器。早期版本读取的是另一个未文档化的 LwM2M 资源（`.../60001/0/
+27300`），假设返回值按 compose 项目分组——但在一台真实部署了容器的
+服务器上测试时返回了空结果，因此已切换成能正常工作的 `get_docker_info`
+设备控制动作（已通过真实抓包确认），并在客户端过滤出被监控的子集，
+与 `device process monitored` 的形态/用途保持一致。
+
+`device usb get-monitor`/`set-monitor` 控制的是设备是否允许使用
+USB存储设备（如U盘），而不是早期版本以为的"USB插拔告警"。使用的是
+`get_usb_storage_status`/`set_usb_storage_status` 设备控制动作，已通过
+真实抓包在真实服务器上验证过；`set-monitor` 还在 `log operations
+list` 的审计记录里做了交叉核实——这个动作会被记录为友好的事件名
+`enableUsb`/`disableUsb`（大多数动作只会被记录成原始JSON），说明服务器
+确实识别并处理了这个动作。早期版本用的是 `get_usb_change`/
+`set_peripheral_monitor`（USB插拔告警），其中 `set_peripheral_monitor`
+在同一份审计记录里只留下了未被识别的原始JSON，这也是它并非真实动作的
+一个有力信号，因此已替换。部分设备对 `get_usb_storage_status` 会返回
+空结果而不是一个确切的值，本CLI会将其归一化为 `enabled: false`。
+
+`device monitor` 返回的 `value` 是所选 `--type` 对应的使用率百分比
+（0-100）——`--type cpu` 时是CPU使用率，`--type memory` 时是内存使用率
+（根据观察到的真实数值推断，与 `device get-monitor` 的
+`cpu.usage_percent`/`memory.usage_percent` 字段吻合，并非来自官方规范）。
+采用宽松解析（JSON数字或数字字符串都会被归一化），因为有的服务器
+返回的是字符串。
 
 `device get-monitor` 未在 DeviceOn-EIM-v2.3.0.md 中记录（通过抓包分析
 `get_board_info` 设备控制接口流量得到）。其返回值已做归一化处理：原始
@@ -131,35 +187,30 @@ agent数据里数字、数字字符串、`"N/A"` 占位符混杂不一致，本C
 接口，用相同方式发现），归一化方式相似——`threadcpuloading`/
 `threadmemloading` 转换成数字 `cpu_percent`/`mem_percent`，
 `threadismonitor` 转换成真正的布尔值 `is_monitored`。其单条记录的字段
-结构是参照已确认的 `device process list`（同一子系统）类比推断的，并未
-在有数据的真实场景下验证过——详见 `internal/DeviceOn-EIM/types.go` 里
+结构是参照同一子系统的 `get_software_info` 接口类比推断的，并未在有
+数据的真实场景下验证过——详见 `internal/DeviceOn-EIM/types.go` 里
 `MonitoredProcess` 的注释。
 
-`device usb set-storage` 未文档化且未经验证：它的配套查询命令
-（`usb get-storage`）此前查询了一个猜测的动作名，实测中被服务器忽略
-（只返回空结果而非真实状态），因此已被移除——这个写入动作名也可能
-同样是错的，正式无人值守流程使用前请务必先自行验证效果。
 
 ### 日志与操作记录
 
 ```
 eim-skill log system set-monitor <endpoint-or-name> <on|off>       # 开启/关闭设备的系统日志采集/上报
 
-eim-skill log operations list [--limit N] [--target <substr>] [--last <30m|12h|3d>]
-eim-skill log operations delete <id>
-eim-skill log operations delete-all
-eim-skill log operations batch-delete <id> [id...]
+eim-skill log system list [--device-id <endpoint-or-name>] [--os <os>] [--keywords <substr>]
+                           [--mode <mode>] [--level <level>] [--limit N] [--last <30m|12h|3d>]
+eim-skill log system delete-by-device <endpoint-or-name>
 
-eim-skill log agent request <endpoint-or-name> <callback-url> <action-id>
-eim-skill log agent status <action-id>
-eim-skill log agent download <endpoint-or-name> [--out <file>]
+eim-skill log operations list [--limit N] [--target <substr>] [--last <30m|12h|3d>]
+eim-skill log operations delete-all
 ```
 
-`--last`（用在 `log operations list` 和 `device monitor` 上）接受相对
-时间窗口，而不是原始的 Unix 毫秒时间戳——例如 `--last 30m`（30分钟）、
-`--last 12h`（12小时）、`--last 3d`（3天）——表示从这段时间之前到现在；
-不填则不限制时间范围。`--limit`（默认20）只是限制返回最近多少条记录，
-不需要关心分页（`--page`），因为这个命令总是从结果集的最前面开始取。
+`--last`（用在 `log system list`、`log operations list` 和 `device
+monitor` 上）接受相对时间窗口，而不是原始的 Unix 毫秒时间戳——例如
+`--last 30m`（30分钟）、`--last 12h`（12小时）、`--last 3d`（3天）——
+表示从这段时间之前到现在；不填则不限制时间范围。`--limit`（默认20）
+只是限制返回最近多少条记录，不需要关心分页（`--page`），因为这个命令
+总是从结果集的最前面开始取。
 
 `log operations`（管理员操作审计日志）未在 DeviceOn-EIM-v2.3.0.md 中
 记录——是从 `OperationRecordServlet.java` 反推得到的，其字段名/结构
@@ -170,19 +221,17 @@ eim-skill log agent download <endpoint-or-name> [--out <file>]
 `log system set-monitor` 同样未文档化（通过抓包分析
 `set_monitor_data_report`/`systemd_log_monitor` 设备控制动作得到），但
 已在真实设备上验证执行成功（执行后能在 `log operations list` 的审计
-记录里看到）。目前没有命令可以查询它所开启采集的系统日志本身：文档
-记录的 `/api/systemLog/bypage` 接口在真实服务器测试时返回了HTTP 400
-"Invalid path" 错误（是服务端路由层面的问题，不是请求格式问题——请求
-参数与 DeviceOn-EIM-v2.3.0.md 文档完全一致），因此这个 `list` 命令
-（以及依赖它来发现日志id的 `delete`/`delete-by-device`/`batch-delete`）
-已被移除，而不是保留一个实际用不了的功能。
+记录里看到）。需要先对目标设备打开这个开关，`log system list` 才会有
+该设备的数据。
 
-Agent（客户端）日志获取是异步流程，且需要一个可被访问到的回调服务：
-DeviceOn-EIM 服务器不能直接把文件推送给你，所以 `log agent request`
-会让设备的agent把日志上传到你提供的 `<callback-url>`（必须是设备能
-访问到的、并且真的在运行一个接受上传的HTTP服务的地址——本CLI不提供
-这个服务）。轮询 `log agent status` 直到返回成功，再调用
-`log agent download`（只能下载一次——服务器在提供文件后会将其删除）。
+`log system list` 用于查询设备上报的系统日志条目；`delete-by-device`
+一次性清空某台设备的全部条目（没有按id单条删除或批量删除——
+`delete-by-device` 是唯一的删除命令）。这个接口同样未在
+DeviceOn-EIM-v2.3.0.md 中记录——通过真实抓包反推得到，确认接口路径是
+`/api/systemLog/byPage`（大写 `P`）。本CLI早期版本用的是小写的
+`/api/systemLog/bypage`，会被服务器返回 HTTP 400 "Invalid path"
+错误——这是客户端自身的bug，并非服务器本身的限制，此前曾因这个错误的
+结论把整组命令都移除了，现已找到问题并修正、恢复。
 
 ### OTA 部署
 
