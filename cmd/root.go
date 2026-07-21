@@ -39,12 +39,13 @@ var rootCmd = &cobra.Command{
 	Short: "Command-line skill tools for DeviceOn-EIM device management",
 	Long: `eim-skill wraps DeviceOn-EIM's device management REST API as a set
 of command-line tools: querying and controlling devices (reboot, shutdown,
-volume, backlight, monitoring/alerting), device groups, operation-record
-audit logs, agent log retrieval, and OTA package deployment.
+volume, backlight, monitoring/alerting), device groups, system/operation
+logs, OTA package deployment, and server-level configuration.
 
 eim-skill 把 DeviceOn-EIM 的设备管理 REST API 封装成一组命令行
 工具：设备查询与控制（重启、关机、调音量、调背光、监控与告警）、
-设备组管理、操作审计日志、agent 日志获取、以及 OTA 软件包部署。
+设备组管理、系统日志/操作审计日志、OTA 软件包部署、以及服务器级别
+配置。
 
 Every command prints exactly one JSON object to stdout:
   {"status": 200, "msg": "", "data": ...}   on success 成功
@@ -64,8 +65,9 @@ command.
 Top-level command groups 顶层命令分组:
   device   设备查询与控制（含监控、阈值告警、USB、Docker等）
   group    设备组查询与创建
-  log      操作审计日志、agent 客户端日志
+  log      设备系统日志、操作审计日志
   ota      OTA 软件包部署（Linux/Android/Windows/Docker/通用文件）
+  server   服务器级别配置（不针对具体设备）
   mcp      以 MCP (Model Context Protocol) 服务器模式运行`,
 	Version: version,
 	// Every command reports its own success/failure via the unified JSON
@@ -210,4 +212,49 @@ func parseLastDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid --last value %q (expected e.g. \"30m\", \"12h\", \"3d\"): %w", s, err)
 	}
 	return dur, nil
+}
+
+// addTimeWindowFlags registers the --last/--begin/--end flags shared by
+// every command that filters results to a time range (device monitor,
+// log system list, log operations list) - see resolveTimeWindow for how
+// they're read back.
+func addTimeWindowFlags(cmd *cobra.Command) {
+	cmd.Flags().String("last", "", `only return entries from the last period, e.g. "30m", "12h", "3d" (default: no time filter; mutually exclusive with --begin/--end) - 只返回最近一段时间内的记录，如 "30m"(30分钟)/"12h"(12小时)/"3d"(3天)，不填则不限制时间范围（不能和 --begin/--end 同时使用）`)
+	cmd.Flags().String("begin", "", `absolute start of the time range, RFC3339 or "YYYY-MM-DD HH:MM" (e.g. "2026-07-01 00:00") - only entries at or after this time (时间范围的起始点，RFC3339 或 "YYYY-MM-DD HH:MM"（如 "2026-07-01 00:00"）——只返回这个时间点及之后的记录)`)
+	cmd.Flags().String("end", "", `absolute end of the time range, RFC3339 or "YYYY-MM-DD HH:MM" - only entries at or before this time; combine with --begin for an explicit window, or use alone/with just --begin for an open-ended one (时间范围的结束点，格式同 --begin——只返回这个时间点及之前的记录；可以和 --begin 搭配组成一个明确的时间区间，也可以单独使用，表示不限制起点)`)
+}
+
+// resolveTimeWindow reads the --last/--begin/--end flags (registered via
+// addTimeWindowFlags) and returns the resulting [beginTs, endTs]
+// Unix-millisecond window (0 on either side means unbounded). --last is
+// a relative window ending now; --begin/--end give an absolute range
+// instead (either or both may be given - an omitted bound is left
+// unbounded) and are mutually exclusive with --last.
+func resolveTimeWindow(cmd *cobra.Command) (beginTs, endTs int64, err error) {
+	last, _ := cmd.Flags().GetString("last")
+	beginStr, _ := cmd.Flags().GetString("begin")
+	endStr, _ := cmd.Flags().GetString("end")
+
+	if last != "" && (beginStr != "" || endStr != "") {
+		return 0, 0, fmt.Errorf("--last cannot be combined with --begin/--end - use one or the other")
+	}
+	if last != "" {
+		return lastDurationWindow(last)
+	}
+
+	if beginStr != "" {
+		t, err := parseAbsoluteTime(beginStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid --begin %w", err)
+		}
+		beginTs = t.UnixMilli()
+	}
+	if endStr != "" {
+		t, err := parseAbsoluteTime(endStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid --end %w", err)
+		}
+		endTs = t.UnixMilli()
+	}
+	return beginTs, endTs, nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -102,6 +103,13 @@ func (c *Client) Token() (string, error) {
 	return c.token, nil
 }
 
+// BaseURL returns the server address this client talks to - devices need
+// this to know where to push screenshots back to (see
+// BatchStartScreenshotStream).
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
 // Relogin discards any cached token and logs in again.
 func (c *Client) Relogin() error {
 	return c.login()
@@ -180,6 +188,66 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 		}
 	}
 	return nil
+}
+
+// getRawBytes issues a GET request against path and returns the raw
+// response body and its Content-Type header, for endpoints (like the
+// screenshot and agent-log fetches) that return a file rather than the
+// usual JSON envelope. On a non-2xx response it decodes the body as a
+// statusResponse for a friendlier error message, mirroring do's error
+// handling.
+func (c *Client) getRawBytes(path string) ([]byte, string, error) {
+	if c.token == "" {
+		if err := c.login(); err != nil {
+			return nil, "", err
+		}
+	}
+
+	doOnce := func() (*http.Response, []byte, error) {
+		req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Header.Set("accesstoken", c.token)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		return resp, data, nil
+	}
+
+	resp, data, err := doOnce()
+	if err != nil {
+		return nil, "", fmt.Errorf("DeviceOn-EIM: request GET %s failed: %w", path, err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if err := c.login(); err != nil {
+			return nil, "", err
+		}
+		resp, data, err = doOnce()
+		if err != nil {
+			return nil, "", fmt.Errorf("DeviceOn-EIM: request GET %s failed: %w", path, err)
+		}
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		apiErr := &APIError{StatusCode: resp.StatusCode, Message: string(data)}
+		var sr statusResponse
+		if json.Unmarshal(data, &sr) == nil && sr.ErrMsg != "" {
+			apiErr.Status = sr.Status
+			apiErr.Message = sr.ErrMsg
+		}
+		return nil, "", apiErr
+	}
+	return data, resp.Header.Get("Content-Type"), nil
 }
 
 // ListDevices returns every device registered on the server.
@@ -490,21 +558,50 @@ func (c *Client) SetDeviceGroups(endpoint string, groupNames []string) error {
 // device group it already belongs to. Returns the resulting full group
 // list. Fails if groupName does not exist - the underlying
 // SetDeviceGroups/bygroupname endpoint accepts and silently records
-// nonexistent group names otherwise (confirmed against a live server).
+// nonexistent group names otherwise (confirmed against a live server) -
+// or if the device's OS doesn't match the group's type (a "mix" group
+// accepts any OS; every other type - "linux"/"windows"/"android"/
+// "openharmony", confirmed against a live server's actual group list, are
+// the built-in defaults, though the server doesn't enforce this as a
+// strict enum - requires an exact match). The underlying endpoint doesn't
+// enforce this either: a real bug report found it silently succeeds
+// adding a Windows device to a Linux-typed group.
 func (c *Client) AddDeviceToGroup(endpoint, groupName string) ([]string, error) {
 	allGroups, err := c.ListGroups()
 	if err != nil {
 		return nil, err
 	}
-	exists := false
-	for _, g := range allGroups {
-		if g.Name == groupName {
-			exists = true
+	var targetGroup *DeviceGroup
+	for i := range allGroups {
+		if allGroups[i].Name == groupName {
+			targetGroup = &allGroups[i]
 			break
 		}
 	}
-	if !exists {
+	if targetGroup == nil {
 		return nil, fmt.Errorf("DeviceOn-EIM: group %q does not exist", groupName)
+	}
+
+	if !strings.EqualFold(targetGroup.Type, "mix") {
+		devices, err := c.ListDevices()
+		if err != nil {
+			return nil, err
+		}
+		deviceFound := false
+		var deviceOS string
+		for _, d := range devices {
+			if d.Endpoint == endpoint {
+				deviceOS = d.OS
+				deviceFound = true
+				break
+			}
+		}
+		if !deviceFound {
+			return nil, fmt.Errorf("DeviceOn-EIM: no device found with endpoint %q", endpoint)
+		}
+		if !strings.EqualFold(deviceOS, targetGroup.Type) {
+			return nil, fmt.Errorf("DeviceOn-EIM: device os %q does not match group %q's type %q - only %q devices (or a \"mix\" group) can be added to it", deviceOS, groupName, targetGroup.Type, targetGroup.Type)
+		}
 	}
 
 	current, err := c.GroupsOfDevice(endpoint)
@@ -1016,6 +1113,260 @@ func (c *Client) Shutdown(agentID string) error {
 	return c.execAction(agentID, map[string]interface{}{"shutdown": true})
 }
 
+// ScheduleReboot arms (enabled=true) or cancels (enabled=false) a
+// scheduled reboot for a device. atMs is the first/anchor execution time
+// (Unix milliseconds); cycleDays repeats it every cycleDays days from
+// atMs (0 for a one-time schedule). To cancel, a real packet capture
+// showed re-sending enabled=false with the same atMs/cycleDays originally
+// used to create the schedule - whether the server actually requires an
+// exact match, or a plain enabled=false disarms any pending schedule
+// regardless of the accompanying time/cycle, hasn't been confirmed
+// (verifying either way would require letting an unattended reboot
+// actually fire on a real device, which wasn't done here).
+//
+// NOTE: not documented in AppHub-v2.3.0.md for a single device - only the
+// batch/group variant is ("PUT schedule shutdown-批量设置定时关机",
+// /api/plugins/batchschedule/{groupname}/40008/0/27601). This
+// single-device version was confirmed via a real packet capture to
+// return {"status":"CHANGED"}, sharing that same request shape. cycleDays
+// is confirmed (both by the capture and the documented batch example,
+// which uses "cycle":7) to mean "repeat every N days from atMs" - this
+// represents a weekly schedule exactly (cycleDays=7, atMs anchored to the
+// desired weekday), but not a fixed day-of-month every month, since
+// calendar months aren't a constant number of days; a "monthly" schedule
+// built this way (see cmd's --monthly) will drift off the intended day
+// over time.
+func (c *Client) ScheduleReboot(agentID string, enabled bool, atMs int64, cycleDays int) error {
+	return c.scheduleAction(agentID, "reboot", enabled, atMs, cycleDays)
+}
+
+// ScheduleShutdown is the shutdown counterpart of ScheduleReboot - see
+// its docs for details and caveats.
+func (c *Client) ScheduleShutdown(agentID string, enabled bool, atMs int64, cycleDays int) error {
+	return c.scheduleAction(agentID, "shutdown", enabled, atMs, cycleDays)
+}
+
+func (c *Client) scheduleAction(agentID, action string, enabled bool, atMs int64, cycleDays int) error {
+	actionsBytes, err := json.Marshal(map[string]interface{}{action: enabled})
+	if err != nil {
+		return err
+	}
+	valueBytes, err := json.Marshal(scheduledActionValue{
+		PluginName: "devicecontrol",
+		Actions:    string(actionsBytes),
+		Time:       atMs,
+		Cycle:      cycleDays,
+	})
+	if err != nil {
+		return err
+	}
+	body := execActionRequest{ID: devicecontrolResourceID, Value: string(valueBytes)}
+	var sr statusResponse
+	return c.do(http.MethodPut, devicecontrolPath(agentID), body, &sr)
+}
+
+// GetScheduledReboot reports the device's currently configured reboot
+// schedule (see ScheduledPower) - not documented in AppHub-v2.3.0.md,
+// confirmed against a live server via the "get_reboot_plan" devicecontrol
+// action.
+func (c *Client) GetScheduledReboot(agentID string) (*ScheduledPower, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_reboot_plan':true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" || raw == "{}" {
+		return &ScheduledPower{}, nil
+	}
+	var rp rawRebootPlan
+	if err := json.Unmarshal([]byte(raw), &rp); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode reboot schedule: %w", err)
+	}
+	return &ScheduledPower{TimeMs: rp.RebootTime, Cycle: rp.RebootCycle}, nil
+}
+
+// GetScheduledShutdown is the shutdown counterpart of GetScheduledReboot
+// - uses the "get_shutdown_plan" devicecontrol action.
+func (c *Client) GetScheduledShutdown(agentID string) (*ScheduledPower, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_shutdown_plan':true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" || raw == "{}" {
+		return &ScheduledPower{}, nil
+	}
+	var sp rawShutdownPlan
+	if err := json.Unmarshal([]byte(raw), &sp); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode shutdown schedule: %w", err)
+	}
+	return &ScheduledPower{TimeMs: sp.ShutdownTime, Cycle: sp.ShutdownCycle}, nil
+}
+
+// BatchStartScreenshotStream tells every device in clientIDs (endpoints)
+// to start pushing periodic screenshots to host (this server's own
+// address, from BaseURL()) every intervalMs milliseconds - the first
+// screenshot becomes fetchable via GetScreenshot after roughly that same
+// interval. Not documented in AppHub-v2.3.0.md (only the single-device
+// trigger is); confirmed against a live server via a real packet capture.
+func (c *Client) BatchStartScreenshotStream(clientIDs []string, host string, intervalMs int) error {
+	clientIDsJSON, err := json.Marshal(clientIDs)
+	if err != nil {
+		return err
+	}
+	valueBytes, err := json.Marshal(screenshotStreamValue{
+		Host:     host,
+		Interval: strconv.Itoa(intervalMs),
+	})
+	if err != nil {
+		return err
+	}
+	body := batchScreenshotRequest{
+		ClientIDs: string(clientIDsJSON),
+		Target:    "/40005/0/27406",
+		Value:     string(valueBytes),
+	}
+	var sr statusResponse
+	return c.do(http.MethodPut, "/api/devicemgr/batchExec", body, &sr)
+}
+
+// GetScreenshot fetches a device's most recently captured screenshot (see
+// BatchStartScreenshotStream) as raw image bytes, along with its HTTP
+// Content-Type (e.g. "image/jpg"). Not documented in AppHub-v2.3.0.md;
+// confirmed against a live server - a device without an active display
+// session (some headless Linux devices, confirmed via a live test)
+// returns an error ("Get screen image error") instead of an image. The
+// "t=" query parameter is a cache-busting value, matching a real packet
+// capture (the browser sends a random number there to defeat caching).
+func (c *Client) GetScreenshot(agentID string) ([]byte, string, error) {
+	path := fmt.Sprintf("/api/devicemgr/screenshotimg/%s?t=%d", url.PathEscape(agentID), time.Now().UnixNano())
+	return c.getRawBytes(path)
+}
+
+// agentLogTriggerResourceID is the LwM2M resource written to trigger an
+// agent log upload (see DownloadAgentLog) - object/instance 40001/0,
+// resource 27012.
+const agentLogTriggerResourceID = 27012
+
+// agentLogPollInterval/agentLogPollTimeout govern DownloadAgentLog's wait
+// for the device's log upload to land: poll every agentLogPollInterval,
+// giving up (and returning an error) if agentLogPollTimeout passes without
+// success - matching the 3-minute timeout from a real packet capture of
+// this flow.
+const (
+	agentLogPollInterval = 2 * time.Second
+	agentLogPollTimeout  = 3 * time.Minute
+)
+
+// DownloadAgentLog fetches a device's agent (client-side) log: a
+// three-step, undocumented (in AppHub-v2.3.0.md) process confirmed against
+// a live server via a real packet capture. First, the device is told (via
+// a plain LwM2M write to resource 40001/0/27012) to push its agent log to
+// this server's own address (BaseURL), tagged with a fresh actionId
+// (the current Unix millisecond timestamp, matching the capture). Then
+// GET /api/devicemgr/logStatus?actionId=<actionId> is polled until it
+// reports that same actionId as "success" - meaning the push has arrived
+// - or agentLogPollTimeout elapses. Finally the log itself is fetched
+// from GET /api/devicemgr/agentLog/{agentID}, as raw bytes plus its HTTP
+// Content-Type.
+func (c *Client) DownloadAgentLog(agentID string) ([]byte, string, error) {
+	actionID := strconv.FormatInt(time.Now().UnixMilli(), 10)
+
+	valueBytes, err := json.Marshal(agentLogTriggerValue{
+		Address:  c.baseURL,
+		ActionID: actionID,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	triggerPath := fmt.Sprintf("/api/devicemgr/%s/40001/0/%d", url.PathEscape(agentID), agentLogTriggerResourceID)
+	triggerBody := execActionRequest{ID: agentLogTriggerResourceID, Value: string(valueBytes)}
+	if err := c.do(http.MethodPut, triggerPath, triggerBody, nil); err != nil {
+		return nil, "", fmt.Errorf("trigger agent log upload: %w", err)
+	}
+
+	if err := c.pollLogStatus(actionID); err != nil {
+		return nil, "", err
+	}
+
+	logPath := "/api/devicemgr/agentLog/" + url.PathEscape(agentID)
+	return c.getRawBytes(logPath)
+}
+
+// pollLogStatus polls GET /api/devicemgr/logStatus?actionId=<actionId>
+// (shared by DownloadAgentLog and DownloadDeviceFile, both of which
+// trigger an async device-side push tagged with actionId) every
+// agentLogPollInterval until it reports "success", or returns an error
+// once agentLogPollTimeout elapses.
+func (c *Client) pollLogStatus(actionID string) error {
+	statusPath := "/api/devicemgr/logStatus?actionId=" + url.QueryEscape(actionID)
+	deadline := time.Now().Add(agentLogPollTimeout)
+	for {
+		var sr agentLogStatusResponse
+		if err := c.do(http.MethodGet, statusPath, nil, &sr); err != nil {
+			return fmt.Errorf("poll push status: %w", err)
+		}
+		if sr.Result == "success" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("DeviceOn-EIM: push did not complete within %s", agentLogPollTimeout)
+		}
+		time.Sleep(agentLogPollInterval)
+	}
+}
+
+// agentFileTriggerResourceID is the LwM2M resource written to trigger a
+// push of one specific file from the device's filesystem (see
+// DownloadDeviceFile) - object/instance 40001/0, resource 27023. Compare
+// agentLogTriggerResourceID (27012), which pushes the whole agent log
+// instead of one named file.
+const agentFileTriggerResourceID = 27023
+
+// DownloadDeviceFile fetches one file at an absolute path (remotePath) on
+// a device's filesystem, as a zip archive containing just that one file -
+// not documented in AppHub-v2.3.0.md, confirmed against a live server via
+// a real packet capture. Shares DownloadAgentLog's trigger/poll/fetch
+// shape, but against a different LwM2M resource (40001/0/27023, which
+// takes an explicit LogFile path instead of dumping the whole log) and a
+// different download endpoint (/api/devicemgr/log, not
+// /api/devicemgr/agentLog) that also requires an "appname" label - an
+// arbitrary string that ties the trigger to the download's
+// filename/value query parameters (confirmed live: filename must be
+// "<clientId>_<appname>.zip", and value must equal appname, or the
+// server can't find what was pushed). This reuses actionId itself as
+// appname, since nothing in the capture suggests its value carries any
+// meaning beyond correlating the two requests, and actionId is already
+// guaranteed unique.
+func (c *Client) DownloadDeviceFile(agentID, remotePath string) ([]byte, string, error) {
+	actionID := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	appName := actionID
+
+	valueBytes, err := json.Marshal(agentFileTriggerValue{
+		Address:  c.baseURL,
+		ActionID: actionID,
+		AppName:  appName,
+		LogFile:  []string{remotePath},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	triggerPath := fmt.Sprintf("/api/devicemgr/%s/40001/0/%d", url.PathEscape(agentID), agentFileTriggerResourceID)
+	triggerBody := execActionRequest{ID: agentFileTriggerResourceID, Value: string(valueBytes)}
+	if err := c.do(http.MethodPut, triggerPath, triggerBody, nil); err != nil {
+		return nil, "", fmt.Errorf("trigger file push: %w", err)
+	}
+
+	if err := c.pollLogStatus(actionID); err != nil {
+		return nil, "", err
+	}
+
+	q := url.Values{}
+	q.Set("filename", agentID+"_"+appName+".zip")
+	q.Set("type", "app")
+	q.Set("clientId", agentID)
+	q.Set("value", appName)
+	return c.getRawBytes("/api/devicemgr/log?" + q.Encode())
+}
+
 // SetVolume sets the device's system audio volume (0-100).
 //
 // NOTE: unlike Reboot/Shutdown, this action is not documented in
@@ -1236,6 +1587,112 @@ func (c *Client) GetMonitoredProcesses(agentID string) ([]MonitoredProcess, erro
 	return processes, nil
 }
 
+// ListProcesses returns every running process/thread on a Windows or
+// Linux device, regardless of monitor status - see GetMonitoredProcesses
+// for just the monitored subset. Not documented in AppHub-v2.3.0.md;
+// confirmed against a live server (uses the "get_software_info"
+// devicecontrol action).
+func (c *Client) ListProcesses(agentID string) ([]ProcessInfo, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_software_info':true}`)
+	if err != nil {
+		return nil, err
+	}
+
+	processes := make([]ProcessInfo, 0)
+	if raw == "" {
+		return processes, nil
+	}
+
+	var rawProcesses []rawProcessInfo
+	if err := json.Unmarshal([]byte(raw), &rawProcesses); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode process list: %w", err)
+	}
+	for _, p := range rawProcesses {
+		processes = append(processes, p.normalize())
+	}
+	return processes, nil
+}
+
+// setMonitorListItem adds or removes one item to/from a device's
+// application/process or Docker monitor list. It fetches the device's
+// current list via listAction, finds the single item whose matchKey
+// field equals matchValue, and resends that exact item verbatim inside
+// "pkgname" alongside {actionKey: enabled} - see monitorListValue for why
+// (the underlying API requires the full original object, not just an
+// identifier).
+func (c *Client) setMonitorListItem(agentID, listAction, actionKey, matchKey, matchValue, itemDescription string, enabled bool) error {
+	raw, err := c.getPluginAction(agentID, listAction)
+	if err != nil {
+		return err
+	}
+	var items []json.RawMessage
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &items); err != nil {
+			return fmt.Errorf("DeviceOn-EIM: decode list for monitor selection: %w", err)
+		}
+	}
+
+	var match json.RawMessage
+	for _, item := range items {
+		var probe map[string]string
+		if err := json.Unmarshal(item, &probe); err != nil {
+			continue
+		}
+		if probe[matchKey] == matchValue {
+			match = item
+			break
+		}
+	}
+	if match == nil {
+		return fmt.Errorf("DeviceOn-EIM: no %s %q found on device %q", itemDescription, matchValue, agentID)
+	}
+
+	actionsBytes, err := json.Marshal(map[string]interface{}{actionKey: enabled})
+	if err != nil {
+		return err
+	}
+	valueBytes, err := json.Marshal(monitorListValue{
+		PluginName: "devicecontrol",
+		Actions:    string(actionsBytes),
+		PkgName:    []json.RawMessage{match},
+	})
+	if err != nil {
+		return err
+	}
+	body := execActionRequest{ID: devicecontrolResourceID, Value: string(valueBytes)}
+	var sr statusResponse
+	return c.do(http.MethodPut, devicecontrolPath(agentID), body, &sr)
+}
+
+// SetProcessMonitored adds (enabled=true) or removes (enabled=false) a
+// specific process, identified by pid, to/from application/process
+// monitoring - the caller only needs the pid; this fetches the device's
+// current process list (get_software_info) to find the matching process
+// and resends it verbatim, as the underlying API requires. Not
+// documented in AppHub-v2.3.0.md for a single device (only a batch/group
+// variant is, "PUT 批量设备APP/进程监控设置-加入监控列表",
+// /api/plugins/batchsetsoftwaremonitor/{groupname}/40008/0/27601, which
+// was found to reliably fail with an empty-bodied HTTP 500 on a live
+// server); this single-device version was confirmed against a live
+// server via a real packet capture and cross-verified end-to-end by
+// re-reading "get_monitor_app" after both adding and removing a process.
+func (c *Client) SetProcessMonitored(agentID string, pid int64, enabled bool) error {
+	return c.setMonitorListItem(agentID, `{'get_software_info':true}`, "set_isProcessMonitor", "threadpid", strconv.FormatInt(pid, 10), "process with pid", enabled)
+}
+
+// SetDockerContainerMonitored adds (enabled=true) or removes
+// (enabled=false) a specific Docker container, identified by name,
+// to/from Docker container monitoring - the caller only needs the
+// container name; this fetches the device's current container list
+// (get_docker_info) to find the matching container and resends it
+// verbatim. Not documented in AppHub-v2.3.0.md; confirmed against a live
+// server via a real packet capture and cross-verified end-to-end by
+// re-reading "get_docker_info" after both adding and removing a
+// container.
+func (c *Client) SetDockerContainerMonitored(agentID, containerName string, enabled bool) error {
+	return c.setMonitorListItem(agentID, `{'get_docker_info':true}`, "set_isDockerMonitor", "name", containerName, "container named", enabled)
+}
+
 func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
 	raw, err := c.getPluginAction(agentID, `{'get_threshold':true}`)
 	if err != nil {
@@ -1287,11 +1744,12 @@ func (c *Client) SetThreshold(agentID, metric string, enabled bool, warn, errorL
 	})
 }
 
-// GetDockerInfo returns the Docker containers on a device that are
-// currently selected for monitoring (IsMonitor == "true"). The
-// devicecontrol "get_docker_info" action itself returns every container
-// regardless of monitor status; this filters to the monitored subset.
-func (c *Client) GetDockerInfo(agentID string) ([]DockerContainer, error) {
+// ListDockerContainers returns every Docker container on a device,
+// regardless of monitor status - see GetDockerInfo for just the
+// monitored subset. Not documented in AppHub-v2.3.0.md; confirmed
+// against a live server (uses the "get_docker_info" devicecontrol
+// action).
+func (c *Client) ListDockerContainers(agentID string) ([]DockerContainer, error) {
 	raw, err := c.getPluginAction(agentID, `{'get_docker_info':true}`)
 	if err != nil {
 		return nil, err
@@ -1303,7 +1761,17 @@ func (c *Client) GetDockerInfo(agentID string) ([]DockerContainer, error) {
 	if err := json.Unmarshal([]byte(raw), &containers); err != nil {
 		return nil, fmt.Errorf("DeviceOn-EIM: decode docker info: %w", err)
 	}
+	return containers, nil
+}
 
+// GetDockerInfo returns the Docker containers on a device that are
+// currently selected for monitoring (IsMonitor == "true") - see
+// ListDockerContainers for every container regardless of monitor status.
+func (c *Client) GetDockerInfo(agentID string) ([]DockerContainer, error) {
+	containers, err := c.ListDockerContainers(agentID)
+	if err != nil {
+		return nil, err
+	}
 	monitored := make([]DockerContainer, 0, len(containers))
 	for _, container := range containers {
 		if container.IsMonitor == "true" {
@@ -1357,6 +1825,40 @@ func (c *Client) SetUSBMonitorEnabled(agentID string, enabled bool) error {
 	})
 }
 
+// GetUSBStorageEnabled reports whether USB mass-storage device access is
+// currently enabled on the device. Confirmed against a live Windows
+// device via a real packet capture and cross-verified by toggling
+// SetUSBStorageEnabled true/false and observing this correctly reflects
+// each change in real time - content.value there is the bare string
+// "true"/"false" (unlike GetUSBMonitorEnabled's "get_usb_change", which
+// wraps its value in a JSON object). Some devices (e.g. a Linux
+// industrial PC tested) don't support this action at all and return an
+// empty result regardless of the last value set - normalized to false
+// here rather than erroring, since there's no way to distinguish
+// "genuinely off" from "not supported" via this action alone.
+func (c *Client) GetUSBStorageEnabled(agentID string) (bool, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_usb_storage_status':true}`)
+	if err != nil {
+		return false, err
+	}
+	return raw == "true", nil
+}
+
+// SetUSBStorageEnabled enables or disables USB mass-storage device access
+// on the device (whether it will allow a USB flash drive etc to be used).
+// This is a separate, independent switch from USB peripheral
+// change-alerting (SetUSBMonitorEnabled) - both are exposed under the
+// same devicecontrol resource (27601) but control different things.
+//
+// NOTE: not documented in AppHub-v2.3.0.md; uses the
+// "set_usb_storage_status" devicecontrol action, confirmed against a
+// live server via a real packet capture and cross-checked in "log
+// operations list"'s audit trail: enabled=true is logged as "enableUsb"
+// and enabled=false as "disableUsb".
+func (c *Client) SetUSBStorageEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{"set_usb_storage_status": enabled})
+}
+
 // SetSystemLogMonitorEnabled turns systemd log collection/reporting on or
 // off for a device. This feeds ListSystemLogs's data - without it, system
 // log queries for that device may return nothing.
@@ -1369,6 +1871,66 @@ func (c *Client) SetSystemLogMonitorEnabled(agentID string, enabled bool) error 
 	})
 }
 
+// GetSystemLogMonitorEnabled reports whether systemd log
+// collection/reporting is currently enabled on a device (see
+// SetSystemLogMonitorEnabled). Not documented in AppHub-v2.3.0.md;
+// confirmed against a live server via the "get_monitor_data_report"
+// devicecontrol action - which also reports cpu_monitor/memory_monitor in
+// the same response (see GetMonitorDataReport for those).
+func (c *Client) GetSystemLogMonitorEnabled(agentID string) (bool, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_monitor_data_report':true}`)
+	if err != nil {
+		return false, err
+	}
+	if raw == "" || raw == "{}" {
+		return false, nil
+	}
+	var r rawMonitorDataReport
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return false, fmt.Errorf("DeviceOn-EIM: decode monitor data report status: %w", err)
+	}
+	return r.SystemdLogMonitor, nil
+}
+
+// GetMonitorDataReport reports whether CPU/memory historical-data
+// collection is currently enabled on a device - this feeds "device
+// monitor"'s samples (see SetCPUMonitorEnabled/SetMemoryMonitorEnabled).
+// Not documented in AppHub-v2.3.0.md; confirmed against a live server via
+// the "get_monitor_data_report" devicecontrol action.
+func (c *Client) GetMonitorDataReport(agentID string) (*MonitorDataReportStatus, error) {
+	raw, err := c.getPluginAction(agentID, `{'get_monitor_data_report':true}`)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" || raw == "{}" {
+		return &MonitorDataReportStatus{}, nil
+	}
+	var r rawMonitorDataReport
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return nil, fmt.Errorf("DeviceOn-EIM: decode monitor data report status: %w", err)
+	}
+	return &MonitorDataReportStatus{CPU: r.CPUMonitor, Memory: r.MemoryMonitor}, nil
+}
+
+// SetCPUMonitorEnabled turns CPU historical-data collection/reporting on
+// or off for a device - this feeds "device monitor --type cpu"'s
+// samples. Not documented in AppHub-v2.3.0.md; confirmed against a live
+// server via a real packet capture.
+func (c *Client) SetCPUMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{
+		"set_monitor_data_report": []map[string]interface{}{{"cpu_monitor": enabled}},
+	})
+}
+
+// SetMemoryMonitorEnabled is the memory counterpart of
+// SetCPUMonitorEnabled - feeds "device monitor --type memory"'s samples.
+// Confirmed against a live server via a real packet capture.
+func (c *Client) SetMemoryMonitorEnabled(agentID string, enabled bool) error {
+	return c.execAction(agentID, map[string]interface{}{
+		"set_monitor_data_report": []map[string]interface{}{{"memory_monitor": enabled}},
+	})
+}
+
 // SyncTime triggers an immediate clock sync on the device.
 //
 // NOTE: not documented in AppHub-v2.3.0.md; inferred from the "syncTime"
@@ -1378,6 +1940,19 @@ func (c *Client) SetSystemLogMonitorEnabled(agentID string, enabled bool) error 
 // against real firmware.
 func (c *Client) SyncTime(agentID string) error {
 	return c.execAction(agentID, map[string]interface{}{"syncTime": true})
+}
+
+// --- server config -----------------------------------------------------------
+
+// GetQRCodeData returns the server's client-onboarding config blob (see
+// QRCodeConfig) - not documented in AppHub-v2.3.0.md, confirmed against a
+// live server.
+func (c *Client) GetQRCodeData() (*QRCodeConfig, error) {
+	var cfg QRCodeConfig
+	if err := c.do(http.MethodGet, "/api/configmgr/getqrcodedata", nil, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 // --- operation records ------------------------------------------------------

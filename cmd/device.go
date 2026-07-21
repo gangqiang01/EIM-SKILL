@@ -36,6 +36,8 @@ func init() {
 	deviceCmd.AddCommand(deviceDeleteCmd)
 	deviceCmd.AddCommand(deviceAddToGroupCmd)
 	deviceCmd.AddCommand(deviceMonitorCmd)
+	deviceCmd.AddCommand(deviceGetMonitorReportCmd)
+	deviceCmd.AddCommand(deviceSetMonitorReportCmd)
 	deviceCmd.AddCommand(deviceRebootCmd)
 	deviceCmd.AddCommand(deviceShutdownCmd)
 	deviceCmd.AddCommand(deviceGetVolumeCmd)
@@ -54,7 +56,7 @@ func init() {
 	deviceListCmd.MarkFlagsMutuallyExclusive("online", "offline", "alarm")
 
 	deviceMonitorCmd.Flags().String("type", "", `monitor data type: "cpu" or "memory" (required) - 监控数据类型：cpu 或 memory（必填）`)
-	deviceMonitorCmd.Flags().String("last", "", `only return samples from the last period, e.g. "30m", "12h", "3d" (default: no time filter) - 只返回最近一段时间的采样点，如 "30m"(30分钟)/"12h"(12小时)/"3d"(3天)，不填则不限制时间范围`)
+	addTimeWindowFlags(deviceMonitorCmd)
 	_ = deviceMonitorCmd.MarkFlagRequired("type")
 
 	for _, c := range []*cobra.Command{deviceRebootGroupCmd, deviceShutdownGroupCmd, deviceSetVolumeGroupCmd, deviceSetBacklightGroupCmd} {
@@ -343,14 +345,20 @@ var deviceMonitorCmd = &cobra.Command{
 	Use:   "monitor <endpoint-or-name> --type cpu|memory",
 	Short: "Get CPU or memory monitoring data for a device",
 	Long: `Get historical CPU or memory usage samples for a device. --type is
-required; --last optionally restricts the window to a recent relative
-period (e.g. "30m", "12h", "3d") instead of returning every stored sample.
+required. Restrict the time range with either --last (a recent relative
+period, e.g. "30m", "12h", "3d") or --begin/--end (an absolute range,
+RFC3339 or "YYYY-MM-DD HH:MM" - either or both may be given; --last is
+mutually exclusive with these) - omit all three to return every stored
+sample.
 
-获取设备的 CPU 或内存历史监控数据。--type 必填；--last 可选，用来只看
-最近一段时间的数据（如 "30m"=30分钟、"12h"=12小时、"3d"=3天），不填则
-返回所有已保存的采样点。
+获取设备的 CPU 或内存历史监控数据。--type 必填。可以用 --last（最近
+一段相对时间，如 "30m"=30分钟、"12h"=12小时、"3d"=3天）或者
+--begin/--end（绝对时间区间，RFC3339 或 "YYYY-MM-DD HH:MM"——可以只填
+一个也可以两个都填；不能和 --last 同时使用）来限定时间范围——三个都不填
+则返回所有已保存的采样点。
 
 Example 示例: eim-skill device monitor "146打包机" --type cpu --last 12h
+       eim-skill device monitor "146打包机" --type cpu --begin "2026-07-01 00:00" --end "2026-07-02 00:00"
 
 Example output 输出示例 (empty result when no samples in that window
 如果该时间窗口内没有数据会返回空数组):
@@ -381,8 +389,7 @@ a plain number and failed to decode servers that report it as a string).
 	Args: requireArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataType, _ := cmd.Flags().GetString("type")
-		last, _ := cmd.Flags().GetString("last")
-		begin, end, err := lastDurationWindow(last)
+		begin, end, err := resolveTimeWindow(cmd)
 		if err != nil {
 			return err
 		}
@@ -404,6 +411,103 @@ a plain number and failed to decode servers that report it as a string).
 	},
 }
 
+var deviceGetMonitorReportCmd = &cobra.Command{
+	Use:   "get-monitor-report <endpoint-or-name>",
+	Short: "Report whether CPU/memory historical-data collection is enabled",
+	Long: `Report whether CPU and memory historical-data collection/reporting are
+currently enabled on a device - this is what feeds "device monitor"'s
+samples. If either is off, "device monitor --type cpu|memory" will have
+no new samples to show for that type going forward.
+
+查询设备当前是否开启了CPU/内存历史数据的采集/上报——这是 "device
+monitor" 采样数据的来源。如果某一项是关闭的，"device monitor --type
+cpu|memory" 对应的类型之后就不会再有新的采样数据。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_monitor_data_report"
+devicecontrol action, confirmed against a live server.
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_monitor_data_report" 设备控制
+动作，已用真实服务器验证过。
+
+Example 示例: eim-skill device get-monitor-report "08:00:27:33:EC:2E"
+
+Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"cpu": false, "memory": false}}`,
+	Args: requireArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		status, err := client.GetMonitorDataReport(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(status)
+		return nil
+	},
+}
+
+var deviceSetMonitorReportCmd = &cobra.Command{
+	Use:   "set-monitor-report <endpoint-or-name> <cpu|memory> <on|off>",
+	Short: "Turn CPU or memory historical-data collection on or off",
+	Long: `Turn CPU or memory historical-data collection/reporting on or off for a
+device - this controls whether "device monitor --type cpu|memory" gets
+any new samples going forward (existing samples aren't deleted by
+turning this off).
+
+开启或关闭设备的CPU或内存历史数据采集/上报——控制 "device monitor
+--type cpu|memory" 之后是否还会有新的采样数据（关闭并不会删除已经
+采集到的历史数据）。
+
+Not documented in AppHub-v2.3.0.md; uses the "set_monitor_data_report"
+devicecontrol action (the same action "log system set-monitor" uses for
+system logs, just with a "cpu_monitor"/"memory_monitor" key instead of
+"systemd_log_monitor"), confirmed against a live server via a real
+packet capture.
+
+未在 AppHub-v2.3.0.md 中记录；使用 "set_monitor_data_report" 设备控制
+动作（和 "log system set-monitor" 控制系统日志用的是同一个动作，只是
+键名换成了 "cpu_monitor"/"memory_monitor"，而不是
+"systemd_log_monitor"），已通过真实抓包在真实服务器上验证过。
+
+Example 示例: eim-skill device set-monitor-report "146打包机" cpu on
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(3)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		metric := args[1]
+		enabled, err := parseOnOff(args[2])
+		if err != nil {
+			return err
+		}
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		switch metric {
+		case "cpu":
+			err = client.SetCPUMonitorEnabled(endpoint, enabled)
+		case "memory":
+			err = client.SetMemoryMonitorEnabled(endpoint, enabled)
+		default:
+			return fmt.Errorf("metric must be \"cpu\" or \"memory\", got %q", metric)
+		}
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
 var deviceAddToGroupCmd = &cobra.Command{
 	Use:   "add-to-group <endpoint-or-name> <group-name>",
 	Short: "Add a device to a device group (keeps its existing group memberships)",
@@ -413,9 +517,22 @@ other group. Fails if group-name doesn't exist (checked against "group
 list") - the underlying server endpoint would otherwise silently accept
 and record a nonexistent group name.
 
+Also fails if the device's OS doesn't match the group's type: a "mix"
+group accepts any OS, but every other type ("linux", "windows",
+"android", "openharmony" are the server's built-in defaults) requires an
+exact match. The underlying endpoint doesn't enforce this either -
+confirmed via a real bug report that it silently succeeds adding a
+Windows device to a Linux-typed group.
+
 把设备加入指定的设备组。这是"追加"操作——设备原本所在的其他组不会被
 移除，只是多加入了一个组。如果 group-name 不存在（会对照 "group list"
 校验）则会报错——否则底层服务器接口会静默接受并记录一个不存在的组名。
+
+如果设备的操作系统和目标组的 type 不匹配，同样会报错："mix" 类型的组
+可以接受任何操作系统的设备，但其他类型（"linux"、"windows"、
+"android"、"openharmony" 是服务器内置的几种默认类型）都要求精确匹配。
+底层接口本身也不做这个校验——已通过真实反馈确认，它会静默接受把一台
+Windows设备加入一个Linux类型的组。
 
 Example 示例: eim-skill device add-to-group "08:00:27:33:EC:2E" default
 

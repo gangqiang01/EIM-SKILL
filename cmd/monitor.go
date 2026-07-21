@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,55 @@ func parseOnOff(s string) (bool, error) {
 	default:
 		return false, fmt.Errorf("expected \"on\" or \"off\", got %q", s)
 	}
+}
+
+// percentThresholdMetrics is the subset of settable threshold metrics
+// expressed as a 0-100 percentage. The server itself enforces none of
+// this - confirmed live that it accepts and stores --warn 150 --error 200
+// verbatim for cpu_usage - so the CLI validates it instead.
+var percentThresholdMetrics = map[string]bool{
+	"cpu_usage":         true,
+	"memory_usage":      true,
+	"storage_usage":     true,
+	"battery_available": true,
+}
+
+// descendingThresholdMetrics is the subset of settable threshold metrics
+// where a LOWER value is worse, so warn must be greater than error -
+// opposite of the usual "higher is worse" direction (warn < error) that
+// applies to every other metric. Currently just battery_available
+// (remaining battery capacity: e.g. warn at 20%, error at 10%).
+var descendingThresholdMetrics = map[string]bool{
+	"battery_available": true,
+}
+
+// validateThresholdLevel checks a single --warn or --error value against
+// metric's natural range. Percentage metrics must be within 0-100;
+// everything else just can't be negative.
+func validateThresholdLevel(metric string, level float64) error {
+	if level < 0 {
+		return fmt.Errorf("%v must not be negative", level)
+	}
+	if percentThresholdMetrics[metric] && level > 100 {
+		return fmt.Errorf("%v is out of range for %q - percentage metrics must be within 0-100", level, metric)
+	}
+	return nil
+}
+
+// validateThresholdOrder checks that warn/error are ordered correctly for
+// metric's direction: warn < error for every metric except
+// descendingThresholdMetrics, where it's reversed (warn > error).
+func validateThresholdOrder(metric string, warn, errorLevel float64) error {
+	if descendingThresholdMetrics[metric] {
+		if warn <= errorLevel {
+			return fmt.Errorf("warn (%v) must be greater than error (%v) for %q - a lower value is worse for this metric, so error should trip at a lower value than warn", warn, errorLevel, metric)
+		}
+		return nil
+	}
+	if warn >= errorLevel {
+		return fmt.Errorf("warn (%v) must be less than error (%v) for %q - error should trip at a more severe (higher) value than warn", warn, errorLevel, metric)
+	}
+	return nil
 }
 
 var deviceBoardInfoCmd = &cobra.Command{
@@ -155,6 +205,25 @@ Supported metrics 支持的指标:
   network_upload_speed    网络上传速度
   network_download_speed  网络下载速度
 
+--warn/--error are validated client-side, since the device itself accepts
+anything (confirmed live: it silently stores warn=150/error=200, or even
+negative values, verbatim): percentage metrics (cpu_usage, memory_usage,
+storage_usage, battery_available) must be within 0-100, and neither may be
+negative. They must also be ordered correctly for the metric's direction:
+warn < error for every metric except battery_available, where lower is
+worse, so it's reversed (warn > error, e.g. warn=20, error=10). These
+checks only run against whichever value(s) you actually pass - a pure
+on/off toggle that leaves both flags unset skips them entirely.
+
+--warn/--error 会在客户端做校验，因为设备本身不做任何检查（已实测：
+warn=150、error=200，甚至负数都会被原样静默保存）：百分比类指标
+（cpu_usage、memory_usage、storage_usage、battery_available）必须在
+0-100 之间，且都不能为负数。两者的大小关系也必须符合该指标的方向：
+除 battery_available 外都要求 warn < error；battery_available 因为数值
+越低越糟糕，所以反过来要求 warn > error（如 warn=20、error=10）。这些
+检查只针对你实际传入的参数——如果 --warn/--error 都不填，只是单纯切换
+开关，则完全不会触发这些检查。
+
 Example 示例: eim-skill device threshold set "146打包机" cpu_usage on --warn 70 --error 90
        eim-skill device threshold set "146打包机" cpu_temp off   # just toggles off, keeps existing warn/error
 
@@ -176,6 +245,17 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 		}
 		warnGiven := cmd.Flags().Changed("warn")
 		errorGiven := cmd.Flags().Changed("error")
+
+		if warnGiven {
+			if err := validateThresholdLevel(metric, warn); err != nil {
+				return fmt.Errorf("invalid --warn: %w", err)
+			}
+		}
+		if errorGiven {
+			if err := validateThresholdLevel(metric, errorLevel); err != nil {
+				return fmt.Errorf("invalid --error: %w", err)
+			}
+		}
 
 		client, err := newClient()
 		if err != nil {
@@ -205,6 +285,12 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 			}
 		}
 
+		if warnGiven || errorGiven {
+			if err := validateThresholdOrder(metric, warn, errorLevel); err != nil {
+				return fmt.Errorf("invalid --warn/--error: %w", err)
+			}
+		}
+
 		if err := client.SetThreshold(endpoint, metric, enabled, warn, errorLevel); err != nil {
 			return err
 		}
@@ -217,11 +303,70 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 
 var deviceProcessCmd = &cobra.Command{
 	Use:   "process",
-	Short: "List the processes currently selected for application/process monitoring",
-	Long: `List the processes on a device currently selected for application/process
-monitoring.
+	Short: "List a device's processes, and add/remove ones selected for monitoring",
+	Long: `List every running process on a device ("list"), just the ones currently
+selected for application/process monitoring ("monitored"), or add/remove
+a specific process (by pid) to/from that monitored list ("set-monitor").
 
-列出设备上当前被选中监控的进程。`,
+列出设备上所有正在运行的进程（"list"），只列出当前被选中监控的进程
+（"monitored"），或者把某个进程（按pid）加入/移出监控列表
+（"set-monitor"）。`,
+}
+
+var deviceProcessListCmd = &cobra.Command{
+	Use:   "list <endpoint-or-name>",
+	Short: "List every process running on a device",
+	Long: `List every running process/thread on a device (not just the monitored
+subset - see "device process monitored" for that), with normalized
+numeric CPU/memory percentages, a real is_monitored boolean, and pid as a
+number.
+
+列出设备上所有正在运行的进程/线程（不只是被监控的那部分——那个见
+"device process monitored"），CPU/内存占用已转成数字百分比，
+is_monitored 是真正的布尔值，pid 也已归一化成数字。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_software_info"
+devicecontrol action, confirmed against a live server.
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_software_info" 设备控制动作，
+已用真实服务器验证过。
+
+Example 示例: eim-skill device process list "08:00:27:33:EC:2E"
+
+Example output 输出示例 (real, trimmed 真实返回，已截断):
+  {
+    "status": 200, "msg": "",
+    "data": [
+      {
+        "command": "irqbalance",
+        "command_line": "/usr/sbin/irqbalance --foreground",
+        "exe": "/usr/sbin/irqbalance",
+        "pid": 544,
+        "cpu_percent": 0.02,
+        "mem_percent": 0.04,
+        "status": "S",
+        "username": "root",
+        "is_monitored": false
+      }
+    ]
+  }`,
+	Args: requireArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		procs, err := client.ListProcesses(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(procs)
+		return nil
+	},
 }
 
 var deviceProcessMonitoredCmd = &cobra.Command{
@@ -259,15 +404,128 @@ Example output 输出示例 (empty when nothing is selected 未选中任何进�
 	},
 }
 
+var deviceProcessSetMonitorCmd = &cobra.Command{
+	Use:   "set-monitor <endpoint-or-name> <pid> <on|off>",
+	Short: "Add or remove a specific process from application/process monitoring",
+	Long: `Add (on) or remove (off) one process, identified by pid, to/from the
+device's monitored-process list (see "device process monitored"). Just
+supply the pid - this looks up the matching process in "device process
+list" itself and resends its full details, since the underlying device
+API requires that (not just a bare pid).
+
+把某个进程（用pid指定）加入（on）或移出（off）设备的监控进程列表
+（见 "device process monitored"）。只需要提供pid——本命令会自动从
+"device process list" 里查到这个进程的完整信息并重新提交，因为设备
+底层接口要求的是完整信息，而不是只给一个pid。
+
+Not documented in AppHub-v2.3.0.md for a single device - only a
+batch/group variant is ("PUT 批量设备APP/进程监控设置-加入监控列表",
+/api/plugins/batchsetsoftwaremonitor/{groupname}/40008/0/27601), which
+was found to reliably fail with an empty-bodied HTTP 500 on a live
+server (the same failure pattern as another documented-but-broken batch
+endpoint found earlier). This single-device version was confirmed
+against a live server via a real packet capture and cross-verified
+end-to-end: adding a pid makes it appear in "device process monitored",
+and removing it makes it disappear again.
+
+未在 AppHub-v2.3.0.md 中记录单设备版本——文档里只记录了批量/分组版本
+（"PUT 批量设备APP/进程监控设置-加入监控列表"，/api/plugins/
+batchsetsoftwaremonitor/{groupname}/40008/0/27601），实测无论用哪个
+分组都稳定返回空身体的HTTP 500（和此前发现的另一个文档记录但已损坏的
+批量接口是同样的错误模式）。这个单设备版本已通过真实抓包在真实服务器
+上验证过，并做了端到端交叉验证：加入一个pid后它会出现在
+"device process monitored" 里，移出后又会消失。
+
+Example 示例: eim-skill device process set-monitor "146打包机" 544 on
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(3)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pid, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			return fmt.Errorf("%q is not an integer pid: %w", args[1], err)
+		}
+		enabled, err := parseOnOff(args[2])
+		if err != nil {
+			return err
+		}
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetProcessMonitored(endpoint, pid, enabled); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
 // docker monitoring
 
 var deviceDockerCmd = &cobra.Command{
 	Use:   "docker",
-	Short: "Get info on a device's monitored Docker containers",
-	Long: `List the Docker containers on a device that are currently selected for
-monitoring.
+	Short: "List a device's Docker containers, and add/remove ones selected for monitoring",
+	Long: `List every Docker container on a device ("list"), just the ones
+currently selected for monitoring ("monitored"), or add/remove a specific
+container (by name) to/from that monitored list ("set-monitor").
 
-列出设备上当前被选中监控的 Docker 容器。`,
+列出设备上所有 Docker 容器（"list"），只列出当前被选中监控的容器
+（"monitored"），或者把某个容器（按名称）加入/移出监控列表
+（"set-monitor"）。`,
+}
+
+var deviceDockerListCmd = &cobra.Command{
+	Use:   "list <endpoint-or-name>",
+	Short: "List every Docker container on a device",
+	Long: `List every Docker container on a device, regardless of monitor status -
+see "device docker monitored" for just the monitored subset.
+
+列出设备上所有 Docker 容器，不论是否被监控——只看被监控的那部分见
+"device docker monitored"。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_docker_info"
+devicecontrol action, confirmed against a live server.
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_docker_info" 设备控制动作，
+已用真实服务器验证过。
+
+Example 示例: eim-skill device docker list "08:00:27:33:EC:2E"
+
+Example output 输出示例 (real, trimmed 真实返回，已截断):
+  {
+    "status": 200, "msg": "",
+    "data": [
+      {
+        "id": "fadf722f405b...", "name": "apphub",
+        "image": "172.21.73.109/apphub/apphub-manager:v6.9.288",
+        "command": "/root/adv/run.sh", "ports": " 30001:30001 8080:8080 8081:8081",
+        "state": "running", "compose": "edgemindmanagermain",
+        "created": "2026-07-10 16:01:50", "ismonitor": "false"
+      }
+    ]
+  }`,
+	Args: requireArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		containers, err := client.ListDockerContainers(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(containers)
+		return nil
+	},
 }
 
 var deviceDockerMonitoredCmd = &cobra.Command{
@@ -332,15 +590,68 @@ Example output 输出示例 (empty when nothing is selected for monitoring
 	},
 }
 
+var deviceDockerSetMonitorCmd = &cobra.Command{
+	Use:   "set-monitor <endpoint-or-name> <container-name> <on|off>",
+	Short: "Add or remove a specific Docker container from monitoring",
+	Long: `Add (on) or remove (off) one Docker container, identified by name,
+to/from the device's monitored-container list (see "device docker
+monitored"). Just supply the container name - this looks up the matching
+container in "device docker list" itself and resends its full details,
+since the underlying device API requires that (not just a bare name).
+
+把某个 Docker 容器（用名称指定）加入（on）或移出（off）设备的监控
+容器列表（见 "device docker monitored"）。只需要提供容器名称——本命令
+会自动从 "device docker list" 里查到这个容器的完整信息并重新提交，
+因为设备底层接口要求的是完整信息，而不是只给一个名称。
+
+Not documented in AppHub-v2.3.0.md; confirmed against a live server via
+a real packet capture and cross-verified end-to-end: adding a container
+makes it appear in "device docker monitored", and removing it makes it
+disappear again (without affecting any other container already being
+monitored).
+
+未在 AppHub-v2.3.0.md 中记录；已通过真实抓包在真实服务器上验证过，
+并做了端到端交叉验证：加入一个容器后它会出现在 "device docker
+monitored" 里，移出后又会消失（不影响其他已经在被监控的容器）。
+
+Example 示例: eim-skill device docker set-monitor "146打包机" apphub on
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(3)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		enabled, err := parseOnOff(args[2])
+		if err != nil {
+			return err
+		}
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetDockerContainerMonitored(endpoint, args[1], enabled); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
 // USB peripheral change monitoring
 
 var deviceUsbCmd = &cobra.Command{
 	Use:   "usb",
-	Short: "USB peripheral change-alerting",
-	Long: `Get/set whether USB peripheral change-alerting is on (alert when a USB
-device is connected/disconnected).
+	Short: "USB peripheral change-alerting and mass-storage device access",
+	Long: `Two separate, independent USB-related switches: peripheral
+change-alerting (get-monitor/set-monitor - alert when a USB device is
+connected/disconnected) and mass-storage device access (set-storage -
+whether USB storage devices like a flash drive can be used).
 
-获取/设置 USB 外设变更告警是否开启（设备插拔时触发提醒）。`,
+两个相互独立的USB相关开关：外设变更告警（get-monitor/set-monitor——
+设备插拔时触发提醒）和USB存储设备访问权限（set-storage——是否允许
+使用USB存储设备如U盘）。`,
 }
 
 var deviceUsbGetMonitorCmd = &cobra.Command{
@@ -402,21 +713,13 @@ each change.
 "get-monitor"，能正确反映每次变化。
 
 This is a separate, independent switch from USB mass-storage access
-(whether the device allows USB storage devices like a flash drive to be
-used) - the two shouldn't be confused, even though both are exposed
-under devicecontrol resource 27601. A "get_usb_storage_status"/
-"set_usb_storage_status" action pair also exists for that (its SET call
-succeeds and is logged under a distinct friendly audit-log event name,
-"enableUsb"/"disableUsb"), but that action's GET side never reflected
-the change on a real device tested (always returned an empty result), so
-it isn't currently exposed as a command here.
+("device usb set-storage" - whether the device allows USB storage
+devices like a flash drive to be used) - the two shouldn't be confused,
+even though both are exposed under devicecontrol resource 27601.
 
-这和"USB存储设备访问权限"（是否允许USB存储设备如U盘被使用）是两个
-独立的开关，虽然都挂在同一个设备控制资源（27601）下，但不要混淆。
-也存在一组 "get_usb_storage_status"/"set_usb_storage_status" 动作对应
-后者（它的SET调用会成功，并且会被记录为独立的友好审计事件名
-"enableUsb"/"disableUsb"），但在真实设备上测试时，这个动作的GET一侧
-从未正确反映过变化（一直返回空结果），所以目前没有把它做成命令。
+这和"USB存储设备访问权限"（"device usb set-storage"，是否允许USB存储
+设备如U盘被使用）是两个独立的开关，虽然都挂在同一个设备控制资源
+（27601）下，但不要混淆。
 
 Example 示例: eim-skill device usb set-monitor "146打包机" on
 
@@ -436,6 +739,109 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 			return err
 		}
 		if err := client.SetUSBMonitorEnabled(endpoint, enabled); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceUsbGetStorageCmd = &cobra.Command{
+	Use:   "get-storage <endpoint-or-name>",
+	Short: "Report whether USB mass-storage device access is enabled",
+	Long: `Report whether the device currently allows USB storage devices (e.g. a
+USB flash drive) to be used.
+
+查询设备当前是否允许使用USB存储设备（如U盘）。
+
+Not documented in AppHub-v2.3.0.md; uses the "get_usb_storage_status"
+devicecontrol action, confirmed against a live Windows device via a real
+packet capture and cross-verified by toggling "usb set-storage" true/
+false and observing this correctly reflects each change in real time.
+Not every device supports this action - a Linux industrial PC tested
+returned an empty result regardless of the last value set, which this
+CLI normalizes to "enabled": false (there's no way to distinguish
+"genuinely off" from "not supported" via this action alone).
+
+未在 AppHub-v2.3.0.md 中记录；使用 "get_usb_storage_status" 设备控制
+动作，已通过真实抓包在一台真实的Windows设备上验证过，并交替切换
+"usb set-storage" 的 true/false 后观察这里能实时正确反映每次变化。
+并非所有设备都支持这个动作——测试过的一台Linux工控机无论最后设置成
+什么值，都返回空结果，本CLI将其归一化为 "enabled": false（仅凭这个
+动作本身无法区分"确实关闭"和"设备不支持"两种情况）。
+
+Example 示例: eim-skill device usb get-storage "08:00:27:33:EC:2E"
+
+Example output 输出示例 (real 真实返回): {"status": 200, "msg": "", "data": {"enabled": true}}`,
+	Args: requireArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		enabled, err := client.GetUSBStorageEnabled(endpoint)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]bool{"enabled": enabled})
+		return nil
+	},
+}
+
+var deviceUsbSetStorageCmd = &cobra.Command{
+	Use:   "set-storage <endpoint-or-name> <on|off>",
+	Short: "Enable or disable USB mass-storage device access on a device",
+	Long: `Turn USB mass-storage device access on or off - when off, the device
+won't allow USB storage devices (e.g. a USB flash drive) to be used.
+
+开启或关闭设备的USB存储设备访问权限——关闭后设备将不允许使用USB存储
+设备（如U盘）。
+
+Not documented in AppHub-v2.3.0.md; uses the "set_usb_storage_status"
+devicecontrol action, confirmed against a live server via a real packet
+capture and cross-checked in "log operations list"'s audit trail: on
+(true) is logged as the friendly event "enableUsb", off (false) as
+"disableUsb". Also cross-verified against "usb get-storage" on a Windows
+device: toggling this true/false and re-reading "get-storage" correctly
+reflects each change in real time.
+
+未在 AppHub-v2.3.0.md 中记录；使用 "set_usb_storage_status" 设备控制
+动作，已通过真实抓包在真实服务器上验证过，并在 "log operations list"
+的审计记录里交叉核实：on（true）会被记录为友好事件名 "enableUsb"，
+off（false）为 "disableUsb"。还在一台Windows设备上与
+"usb get-storage" 做了交叉验证：交替切换 true/false 后再查询
+"get-storage"，能实时正确反映每次变化。
+
+This is a separate, independent switch from USB peripheral
+change-alerting ("device usb set-monitor") - the two shouldn't be
+confused, even though both are exposed under devicecontrol resource
+27601.
+
+这和USB外设变更告警（"device usb set-monitor"）是两个独立的开关，虽然
+都挂在同一个设备控制资源（27601）下，但不要混淆。
+
+Example 示例: eim-skill device usb set-storage "146打包机" off
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(2)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		enabled, err := parseOnOff(args[1])
+		if err != nil {
+			return err
+		}
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.SetUSBStorageEnabled(endpoint, enabled); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -489,12 +895,18 @@ func init() {
 	deviceThresholdSetCmd.Flags().Float64("error", 0, "error level (错误阈值)")
 
 	deviceCmd.AddCommand(deviceProcessCmd)
+	deviceProcessCmd.AddCommand(deviceProcessListCmd)
 	deviceProcessCmd.AddCommand(deviceProcessMonitoredCmd)
+	deviceProcessCmd.AddCommand(deviceProcessSetMonitorCmd)
 
 	deviceCmd.AddCommand(deviceDockerCmd)
+	deviceDockerCmd.AddCommand(deviceDockerListCmd)
 	deviceDockerCmd.AddCommand(deviceDockerMonitoredCmd)
+	deviceDockerCmd.AddCommand(deviceDockerSetMonitorCmd)
 
 	deviceCmd.AddCommand(deviceUsbCmd)
 	deviceUsbCmd.AddCommand(deviceUsbGetMonitorCmd)
 	deviceUsbCmd.AddCommand(deviceUsbSetMonitorCmd)
+	deviceUsbCmd.AddCommand(deviceUsbGetStorageCmd)
+	deviceUsbCmd.AddCommand(deviceUsbSetStorageCmd)
 }

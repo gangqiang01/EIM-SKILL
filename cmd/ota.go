@@ -1387,10 +1387,25 @@ path". --type is required on every command in this group and must match
 whatever category the file was uploaded under in the repo server; there is
 no unconditional "list every file regardless of type" endpoint.
 
+--type here is an arbitrary, freeform category label chosen whenever the
+file was uploaded (e.g. "deploy") - it is NOT an OS/platform selector. If
+you want Linux/Android/Windows/Docker packages specifically, use "ota
+linux list"/"ota android list"/"ota windows-exe list"/"ota windows-zip
+list"/"ota docker list" instead - "ota file list --type linux" (or
+"windows"/"android") will just return an empty list unless someone
+happened to upload a generic file under that literal category name.
+
 把任意文件（不局限于已识别的软件包格式）推送到设备——没有"安装/卸载"
 的概念，就是"把这个文件放到这个路径"。这个命令组下每个命令都必须传
 --type，且必须和文件当初上传到仓库时所属的分类一致；没有"不区分类型
-列出所有文件"的接口。`,
+列出所有文件"的接口。
+
+这里的 --type 是文件上传时随意选定的分类标签（如 "deploy"），并不是
+操作系统/平台的筛选项。如果想查询 Linux/Android/Windows/Docker 的
+具体安装包，请改用 "ota linux list"/"ota android list"/
+"ota windows-exe list"/"ota windows-zip list"/"ota docker list"——
+"ota file list --type linux"（或 "windows"/"android"）通常只会返回
+空数组，除非恰好有人用这个字面值当作分类名上传过通用文件。`,
 }
 
 func init() {
@@ -1419,8 +1434,20 @@ var otaFileListCmd = &cobra.Command{
 	Long: `List files available in the repo server under the given --type category -
 the file names you can pass to "deploy"/"deploy-group".
 
+--type is an arbitrary category label chosen at upload time (e.g.
+"deploy") - NOT an OS/platform name. Looking for Linux/Android/Windows/
+Docker packages specifically? Use "ota linux list"/"ota android
+list"/"ota windows-exe list"/"ota windows-zip list"/"ota docker list"
+instead - this command has no relation to a file's target OS.
+
 按 --type 指定的分类，列出软件仓库里可部署的文件——这里的文件名
 就是之后调用 "deploy"/"deploy-group" 时要填的值。
+
+--type 是上传时随意选定的分类标签（如 "deploy"），不是操作系统/平台
+名称。如果想查询 Linux/Android/Windows/Docker 的具体安装包，请改用
+"ota linux list"/"ota android list"/"ota windows-exe list"/
+"ota windows-zip list"/"ota docker list"——这个命令和文件的目标操作
+系统没有任何关系。
 
 Example 示例: eim-skill ota file list --type deploy
 

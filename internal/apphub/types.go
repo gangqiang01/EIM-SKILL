@@ -243,6 +243,16 @@ type loginResponse struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// QRCodeConfig is the server's client-onboarding config blob, as returned
+// by GET /api/configmgr/getqrcodedata - the same data the web console
+// encodes into its device-pairing QR code. Pasting Data directly into a
+// device agent's own configuration UI connects it to this server, without
+// manually entering the server address/credentials there.
+type QRCodeConfig struct {
+	ID   string `json:"id"`
+	Data string `json:"data"`
+}
+
 type statusResponse struct {
 	Status string `json:"status"`
 	ErrMsg string `json:"errmsg"`
@@ -271,6 +281,25 @@ type execActionRequest struct {
 	Value string `json:"value"`
 }
 
+// monitorListValue is devicecontrol resource 27601's write-value shape
+// for adding/removing a specific process or Docker container to/from
+// application/process or Docker monitoring - confirmed against a live
+// server via a real packet capture. Unlike most other devicecontrol
+// writes, "pkgname" here is a sibling key of "pluginname"/"actions" (not
+// nested inside the "actions" string) - each item is the exact object
+// from "get_software_info" (for processes) or "get_docker_info" (for
+// containers), resent verbatim. "actions"
+// ("set_isProcessMonitor"/"set_isDockerMonitor": true/false) is what
+// actually controls add vs remove - confirmed live that the item's own
+// "threadismonitor"/"ismonitor" field is NOT what determines that (an
+// item resent with either value is still added when the outer flag is
+// true, and removed when it's false).
+type monitorListValue struct {
+	PluginName string            `json:"pluginname"`
+	Actions    string            `json:"actions"`
+	PkgName    []json.RawMessage `json:"pkgname"`
+}
+
 // execBatchRequest is the body for the batch-execute devicecontrol
 // resource (PUT /api/plugins/batchExec/40008/0/27601), used to
 // reboot/shutdown/set-volume/set-backlight an explicit list of devices at
@@ -284,9 +313,117 @@ type execBatchRequest struct {
 	Value     string   `json:"value"`
 }
 
+// batchScreenshotRequest is the body for PUT /api/devicemgr/batchExec -
+// not documented in AppHub-v2.3.0.md (only the single-device screenshot
+// trigger, PUT /api/devicemgr/{agentId}/40005/0/27405, is), confirmed
+// against a live server via a real packet capture. It tells every device
+// in ClientIDs to start pushing periodic screenshots to the host/interval
+// in Value. Unlike the other batchExec endpoint used elsewhere in this
+// client (PUT /api/plugins/batchExec/40008/0/27601, body
+// {"clientIds":[...],"value":...} with ClientIDs as a plain JSON array),
+// this is a different endpoint (/api/devicemgr/batchExec, no "/plugins")
+// with a different body shape: ClientIDs here is itself JSON-encoded as
+// a string, and there's a "target" field carrying the LwM2M
+// object/resource path (confirmed against a live server).
+type batchScreenshotRequest struct {
+	ClientIDs string `json:"clientIds"`
+	Target    string `json:"target"`
+	Value     string `json:"value"`
+}
+
+// screenshotStreamValue is Value's shape for batchScreenshotRequest.
+// Interval is a string (e.g. "5000"), not a JSON number, confirmed
+// against a live server via a real packet capture.
+type screenshotStreamValue struct {
+	Host     string `json:"host"`
+	Interval string `json:"interval"`
+}
+
+// agentLogTriggerValue is execActionRequest's Value shape for triggering
+// an agent log upload (see DownloadAgentLog) - tells the device where to
+// push its log (Address, this server's own base URL) and what ActionID to
+// tag the upload with, confirmed against a live server via a real packet
+// capture.
+type agentLogTriggerValue struct {
+	Address  string `json:"address"`
+	ActionID string `json:"actionId"`
+}
+
+// agentLogStatusResponse is GET /api/devicemgr/logStatus's response shape
+// - Result is "success" once the device's push (started by
+// agentLogTriggerValue's ActionID) has arrived, confirmed against a live
+// server via a real packet capture.
+type agentLogStatusResponse struct {
+	Result   string `json:"result"`
+	ActionID string `json:"actionId"`
+}
+
+// agentFileTriggerValue is execActionRequest's Value shape for triggering
+// a push of one specific file (see DownloadDeviceFile) - like
+// agentLogTriggerValue, but scoped to an absolute path (LogFile, a
+// single-element slice - confirmed against a live server that it's an
+// array even for one file) under an AppName label that ties the trigger
+// to the download's filename/value query parameters. Confirmed against a
+// live server via a real packet capture.
+type agentFileTriggerValue struct {
+	Address  string   `json:"address"`
+	ActionID string   `json:"actionId"`
+	AppName  string   `json:"appname"`
+	LogFile  []string `json:"logFile"`
+}
+
 type actionValue struct {
 	PluginName string `json:"pluginname"`
 	Actions    string `json:"actions"`
+}
+
+// scheduledActionValue is the write-value shape for a scheduled (rather
+// than immediate) devicecontrol reboot/shutdown - the same
+// {"pluginname","actions"} envelope as actionValue, with "time" (the
+// first/anchor execution, Unix milliseconds) and an optional "cycle"
+// (repeat interval in days - omitted entirely for a one-time schedule)
+// added. Documented for the batch/group variant ("PUT schedule
+// shutdown-批量设置定时关机", /api/plugins/batchschedule/{groupname}/
+// 40008/0/27601 in AppHub-v2.3.0.md, whose own example uses "cycle":7 for
+// a weekly schedule) but not for a single device - the single-device
+// version used here was confirmed via a real packet capture, sharing the
+// same value shape (minus "taskname", which is batch/group-only).
+type scheduledActionValue struct {
+	PluginName string `json:"pluginname"`
+	Actions    string `json:"actions"`
+	Time       int64  `json:"time"`
+	Cycle      int    `json:"cycle,omitempty"`
+}
+
+// ScheduledPower is a device's currently configured reboot or shutdown
+// schedule, as reported by the "get_reboot_plan"/"get_shutdown_plan"
+// devicecontrol actions - confirmed against a live server: the action
+// returns an empty object when nothing is scheduled (TimeMs stays 0),
+// and is populated after a real "device schedule reboot/shutdown" call,
+// then empty again after --cancel - including a cancel that didn't reuse
+// the original time/cycle values, confirming --cancel doesn't require an
+// exact match.
+type ScheduledPower struct {
+	TimeMs int64          `json:"timeMs"`    // Unix ms; 0 if nothing is currently scheduled
+	Cycle  FlexibleNumber `json:"cycleDays"` // repeat interval in days; nil if one-time or nothing scheduled
+}
+
+// rawRebootPlan/rawShutdownPlan mirror get_reboot_plan/get_shutdown_plan's
+// actual field names, which differ (rebootTime/rebootCycle vs
+// shutdownTime/shutdownCycle) - normalized into the common ScheduledPower
+// shape above. Cycle is a FlexibleNumber because it's reported as an
+// empty string when unset and a real JSON number when set (confirmed
+// against a live server: {"rebootCycle":"","rebootTime":...} for a
+// one-time schedule vs {"rebootCycle":7,"rebootTime":...} for a weekly
+// one).
+type rawRebootPlan struct {
+	RebootTime  int64          `json:"rebootTime"`
+	RebootCycle FlexibleNumber `json:"rebootCycle"`
+}
+
+type rawShutdownPlan struct {
+	ShutdownTime  int64          `json:"shutdownTime"`
+	ShutdownCycle FlexibleNumber `json:"shutdownCycle"`
 }
 
 // contentResponse wraps LwM2M "read"-style responses, where the actual
@@ -450,6 +587,28 @@ type ThresholdSetting struct {
 	Error   float64 `json:"error"`
 }
 
+// MonitorDataReportStatus reports whether CPU/memory historical-data
+// collection/reporting is currently enabled on a device - this is what
+// feeds "device monitor"'s samples. Confirmed against a live server via
+// the "get_monitor_data_report" devicecontrol action, which also reports
+// systemd log monitoring in the same response (see
+// GetSystemLogMonitorEnabled for that - not exposed here since it's a
+// separate feature/domain, "log system", even though it shares this one
+// underlying action).
+type MonitorDataReportStatus struct {
+	CPU    bool `json:"cpu"`
+	Memory bool `json:"memory"`
+}
+
+// rawMonitorDataReport mirrors "get_monitor_data_report"'s actual
+// response shape, confirmed against a live server:
+// {"cpu_monitor":false,"memory_monitor":false,"systemd_log_monitor":true}.
+type rawMonitorDataReport struct {
+	CPUMonitor        bool `json:"cpu_monitor"`
+	MemoryMonitor     bool `json:"memory_monitor"`
+	SystemdLogMonitor bool `json:"systemd_log_monitor"`
+}
+
 type rawThresholdSetting struct {
 	Warn   json.Number `json:"warn"`
 	Error  json.Number `json:"error"`
@@ -487,11 +646,9 @@ var settableThresholdMetrics = map[string]bool{
 // process monitoring, normalized from the agent's string-typed fields
 // (devicecontrol "get_monitor_app" action) into proper types.
 //
-// NOTE: not documented in AppHub-v2.3.0.md. Field shape is inferred by
-// analogy with the sibling "get_software_info" action (same underlying
-// process-monitor subsystem) - not empirically confirmed against a
-// populated list, since no processes were being monitored on the device
-// this was tested against (only the empty-list case is confirmed).
+// NOTE: not documented in AppHub-v2.3.0.md. Field shape confirmed against
+// a live server's populated list (via SetProcessMonitored adding a real
+// process to the list, then reading it back here).
 type MonitoredProcess struct {
 	Command     string         `json:"command"`
 	PID         FlexibleNumber `json:"pid"`
@@ -512,9 +669,59 @@ type rawMonitoredProcess struct {
 	ThreadIsMonitor  string         `json:"threadismonitor"`
 }
 
+// normalize builds a MonitoredProcess. IsMonitored is always true here,
+// not raw.ThreadIsMonitor == "true" as an earlier version assumed -
+// confirmed against a live server that "get_monitor_app" (what feeds
+// this) always reports "threadismonitor":"" (empty) for every item it
+// returns, monitored or not; being present in this list at all is what
+// "monitored" actually means for this action.
 func (raw rawMonitoredProcess) normalize() MonitoredProcess {
 	return MonitoredProcess{
 		Command:     raw.ThreadCmd,
+		PID:         raw.ThreadPid,
+		CPUPercent:  raw.ThreadCPULoading,
+		MemPercent:  raw.ThreadMemLoading,
+		Status:      raw.ThreadStatus,
+		Username:    raw.ThreadUsername,
+		IsMonitored: true,
+	}
+}
+
+// ProcessInfo is a running process/thread on a Windows or Linux device, as
+// reported by the devicecontrol "get_software_info" action, normalized
+// the same way as MonitoredProcess. Not documented in AppHub-v2.3.0.md;
+// confirmed against a live server, including CommandLine/Exe, which
+// aren't in the older doc example this session found for the sibling
+// batch-monitor-set endpoint.
+type ProcessInfo struct {
+	Command     string         `json:"command"`
+	CommandLine string         `json:"command_line"`
+	Exe         string         `json:"exe"`
+	PID         FlexibleNumber `json:"pid"`
+	CPUPercent  FlexibleNumber `json:"cpu_percent"`
+	MemPercent  FlexibleNumber `json:"mem_percent"`
+	Status      string         `json:"status"`
+	Username    string         `json:"username"`
+	IsMonitored bool           `json:"is_monitored"`
+}
+
+type rawProcessInfo struct {
+	ThreadCmd        string         `json:"threadcmd"`
+	ThreadCmdline    string         `json:"threadcmdline"`
+	ThreadExe        string         `json:"threadexe"`
+	ThreadPid        FlexibleNumber `json:"threadpid"`
+	ThreadCPULoading FlexibleNumber `json:"threadcpuloading"`
+	ThreadMemLoading FlexibleNumber `json:"threadmemloading"`
+	ThreadStatus     string         `json:"threadstatus"`
+	ThreadUsername   string         `json:"threadusername"`
+	ThreadIsMonitor  string         `json:"threadismonitor"`
+}
+
+func (raw rawProcessInfo) normalize() ProcessInfo {
+	return ProcessInfo{
+		Command:     raw.ThreadCmd,
+		CommandLine: raw.ThreadCmdline,
+		Exe:         raw.ThreadExe,
 		PID:         raw.ThreadPid,
 		CPUPercent:  raw.ThreadCPULoading,
 		MemPercent:  raw.ThreadMemLoading,
@@ -553,14 +760,20 @@ type DockerContainer struct {
 // action payload sent to the device) to what (Target, typically
 // "<endpoint>(<devName>)"), when (Ts, Unix ms). Field names/shapes are
 // confirmed against a live server's actual response, not just
-// OperationRecordServlet.java's assumed shape.
+// OperationRecordServlet.java's assumed shape. Event is FlexibleJSON, not
+// a plain string - the server encodes it inconsistently across entries:
+// sometimes a raw JSON object (e.g. {"shutdown":true}), sometimes a JSON
+// string containing escaped JSON text, and sometimes a plain path-like
+// string - confirmed via a live server returning all three shapes across
+// one page of results (a real decode error: "cannot unmarshal object into
+// Go struct field OperationRecord.data.event of type string").
 type OperationRecord struct {
-	ID       int64  `json:"orid"`
-	Type     string `json:"type"`
-	Event    string `json:"event"`
-	Target   string `json:"target"`
-	Username string `json:"username"`
-	Ts       int64  `json:"ts"`
+	ID       int64        `json:"orid"`
+	Type     string       `json:"type"`
+	Event    FlexibleJSON `json:"event"`
+	Target   string       `json:"target"`
+	Username string       `json:"username"`
+	Ts       int64        `json:"ts"`
 }
 
 // operationRecordsPageResponse mirrors /api/records/byPage's actual

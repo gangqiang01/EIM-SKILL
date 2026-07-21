@@ -31,7 +31,7 @@ both the main DeviceOn-EIM server and its companion repo server
 
 ## When to use this skill
 
-- "What Android apps/Windows packages/Docker images/Linux packages can we push?" / "查看可部署的安装包" → `ota <type> list`
+- "What Android apps/Windows packages/Docker images/Linux packages can we push?" / "查看可部署的安装包" → `ota <type> list` (i.e. `ota linux list`/`ota android list`/`ota windows-exe list`/`ota windows-zip list`/`ota docker list` - NOT `ota file list --type linux`/`windows`/`android`, which is a different, unrelated command; see caveat below)
 - "What's installed on device X?" → `ota <type> installed <endpoint-or-name>`
 - "Deploy/update package P version V on device X" / "给设备X部署/更新应用P" → `ota <type> apply` (or `install`/`upgrade` for Windows)
 - "Roll out package P version V to every device in group G" / "给设备组G批量部署应用P" → `ota <type> apply-group` (or `install-group`/`upgrade-group`)
@@ -106,7 +106,15 @@ command.
   repo listing automatically either way, no flag needed.
 - `ota file list`/`deploy`/`deploy-group` require `--type` - there's no
   unconditional "list all files" endpoint; `--type` must match whatever
-  category the file was uploaded under in the repo server.
+  category the file was uploaded under in the repo server. **This `--type`
+  is a freeform label, not an OS/platform selector** - `ota file list
+  --type linux` (or `windows`/`android`) reliably returns an empty list
+  (confirmed via a real bug report: a user tried exactly this, expecting
+  it to return Linux/Windows/Android packages) unless someone happened to
+  upload a generic file under that literal category name. For actual
+  platform packages, use `ota linux list`/`ota android list`/`ota
+  windows-exe list`/`ota windows-zip list`/`ota docker list` instead -
+  `ota file` is a completely separate, generic-file-only feature.
 - Repo-listing endpoints (`list` for all six types) and the full
   device-resolve → repo-lookup → error-handling pipeline are verified
   against a real server. The final device-side deploy call for each type
