@@ -10,6 +10,27 @@ threshold/alert based (not a live streaming dashboard) - this mirrors the
 web console's "monitorAlert" feature. Requires `eim-skill` built and
 configured (see repo README).
 
+## Running the eim-skill binary / 如何运行 eim-skill 二进制
+
+Commands below are written as `../scripts/eim-skill ...`, assuming a
+Linux x86_64 host and this file's own directory as the working
+directory - the binary ships in a `scripts/` folder that sits alongside
+every skill folder (i.e. one level up from this file, at
+`../scripts/`), not on PATH. On a different host, substitute the
+matching binary name everywhere `../scripts/eim-skill` appears below:
+
+- Linux arm64/aarch64: `../scripts/eim-skill-arm64`
+- Windows: `../scripts/eim-skill.exe`
+
+下面的命令统一写成 `../scripts/eim-skill ...`，默认假设运行在 Linux
+x86_64 主机上，且执行时的工作目录就是这个文件所在的目录——二进制文件
+放在和每个技能目录同级的 `scripts/` 目录下（即这个文件所在目录的
+上一级，路径为 `../scripts/`），而不在 PATH 里。如果运行在其他平台，
+请把下面所有出现的 `../scripts/eim-skill` 替换成对应的二进制名：
+
+- Linux arm64/aarch64：`../scripts/eim-skill-arm64`
+- Windows：`../scripts/eim-skill.exe`
+
 ## When to use this skill
 
 - "What's device X's current CPU/memory/storage/battery/network usage?" / "查看设备X的监控详情" → `device get-monitor`
@@ -32,30 +53,30 @@ configured (see repo README).
 ## Commands
 
 ```
-eim-skill device get-monitor <endpoint-or-name>                          # live cpu/memory/storage/battery/network snapshot
+../scripts/eim-skill device get-monitor <endpoint-or-name>                          # live cpu/memory/storage/battery/network snapshot
 
-eim-skill device threshold get <endpoint-or-name>
-eim-skill device threshold set <endpoint-or-name> <metric> <on|off> [--warn N] [--error N]
+../scripts/eim-skill device threshold get <endpoint-or-name>
+../scripts/eim-skill device threshold set <endpoint-or-name> <metric> <on|off> [--warn N] [--error N]
   # metric: cpu_temp, cpu_usage, memory_usage, storage_usage,
   #         battery_available, network_upload_speed, network_download_speed
 
-eim-skill device process list <endpoint-or-name>
-eim-skill device process monitored <endpoint-or-name>
-eim-skill device process set-monitor <endpoint-or-name> <pid> <on|off>
+../scripts/eim-skill device process list <endpoint-or-name>
+../scripts/eim-skill device process monitored <endpoint-or-name>
+../scripts/eim-skill device process set-monitor <endpoint-or-name> <pid> <on|off>
 
-eim-skill device docker list <endpoint-or-name>
-eim-skill device docker monitored <endpoint-or-name>
-eim-skill device docker set-monitor <endpoint-or-name> <container-name> <on|off>
+../scripts/eim-skill device docker list <endpoint-or-name>
+../scripts/eim-skill device docker monitored <endpoint-or-name>
+../scripts/eim-skill device docker set-monitor <endpoint-or-name> <container-name> <on|off>
 
-eim-skill device usb get-monitor <endpoint-or-name>                      # is USB change-alerting on?
-eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB change-alerting on/off
-eim-skill device usb get-storage <endpoint-or-name>                      # is USB mass-storage device access enabled?
-eim-skill device usb set-storage <endpoint-or-name> <on|off>             # USB mass-storage device access on/off
+../scripts/eim-skill device usb get-monitor <endpoint-or-name>                      # is USB change-alerting on?
+../scripts/eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB change-alerting on/off
+../scripts/eim-skill device usb get-storage <endpoint-or-name>                      # is USB mass-storage device access enabled?
+../scripts/eim-skill device usb set-storage <endpoint-or-name> <on|off>             # USB mass-storage device access on/off
 
-eim-skill device monitor <endpoint-or-name> --type cpu|memory [--last <30m|12h|3d>]
+../scripts/eim-skill device monitor <endpoint-or-name> --type cpu|memory [--last <30m|12h|3d>]
   # or an absolute range instead of --last: [--begin <time>] [--end <time>]
-eim-skill device get-monitor-report <endpoint-or-name>
-eim-skill device set-monitor-report <endpoint-or-name> <cpu|memory> <on|off>
+../scripts/eim-skill device get-monitor-report <endpoint-or-name>
+../scripts/eim-skill device set-monitor-report <endpoint-or-name> <cpu|memory> <on|off>
 ```
 
 `<endpoint-or-name>` accepts either the device's endpoint id or its

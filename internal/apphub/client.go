@@ -25,15 +25,14 @@ type Client struct {
 }
 
 // NewClient creates a Client for the AppHub server at baseURL (e.g.
-// "http://127.0.0.1:30010"). Login happens lazily on first request.
-func NewClient(baseURL, username, password string) *Client {
+// "http://127.0.0.1:30010"), issuing requests over httpClient. Login
+// happens lazily on first request.
+func NewClient(baseURL, username, password string, httpClient *http.Client) *Client {
 	return &Client{
-		baseURL:  baseURL,
-		username: username,
-		password: password,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    baseURL,
+		username:   username,
+		password:   password,
+		httpClient: httpClient,
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 // TokenSource supplies the accesstoken used to authenticate against the
@@ -31,14 +30,13 @@ type Client struct {
 }
 
 // NewClient creates a Client for the repo server at baseURL (e.g.
-// "http://127.0.0.1:30001"), authenticating with tokens.
-func NewClient(baseURL string, tokens TokenSource) *Client {
+// "http://127.0.0.1:30001"), authenticating with tokens and issuing
+// requests over httpClient.
+func NewClient(baseURL string, tokens TokenSource, httpClient *http.Client) *Client {
 	return &Client{
-		baseURL: baseURL,
-		tokens:  tokens,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    baseURL,
+		tokens:     tokens,
+		httpClient: httpClient,
 	}
 }
 

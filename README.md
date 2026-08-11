@@ -447,6 +447,52 @@ been removed as a result before the mistake was found and fixed. `level`
 and `pid` are normalized to real JSON numbers - the server reports both
 as numeric strings (e.g. `"level":"4"`), confirmed against a live server.
 
+### Sub-devices
+
+```
+eim-skill subdevice list [--parent <endpoint-or-name>]              # list sub-devices, optionally under one parent device
+eim-skill subdevice get <device-id-or-name> [--service <name>] [--property <name>]  # services/properties + current real-time values ("twin")
+eim-skill subdevice history <device-id-or-name> <service-name> <property-name>
+  [--last <30m|12h|3d>] [--begin <time>] [--end <time>] [--count N]
+eim-skill subdevice events <device-id-or-name> [--page N] [--limit N]
+  [--last <30m|12h|3d>] [--begin <time>] [--end <time>]
+```
+
+Sub-devices ("子设备") are things registered under a parent
+DeviceOn-EIM-managed device (the "edge") via a protocol like
+Modbus/SNMP/executor/restful - each reports properties grouped into named
+services, and can raise events. This is a separate, read-only query
+surface backed by the `apphub-ithings` server (its own base URL,
+`--ithings-base-url`/`ithings_base_url`, default `http://127.0.0.1:8082`)
+- not documented in DeviceOn-EIM-v2.3.0.md for most of what it wraps
+(only the sub-device list, twin, and history endpoints are; `events` is
+undocumented entirely), confirmed against a live server via a real packet
+capture. It accepts the same accesstoken as the main server's `/login` -
+no separate ithings login.
+
+`subdevice get` doubles as service/property discovery: there's no
+separate schema-only endpoint wrapped here, so the "twin" (every
+property ever reported, with its current value) is also how you find the
+`service-name`/`property-name` pairs to pass to `subdevice history`.
+`<device-id-or-name>` accepts either the sub-device's id or its name -
+unlike parent devices' endpoint/devName, a sub-device's name isn't
+guaranteed unique across different parents, so an ambiguous name errors
+out listing the candidates rather than picking one.
+
+`subdevice get`'s `--service`/`--property` narrow the twin down
+client-side (the underlying endpoint has no filter for either, always
+returning every reported property) - with both given, the single
+matching property is returned directly instead of a list (or an error if
+that exact service+property combination has no current value); with just
+one of the two, every match comes back as a list.
+
+`subdevice history`'s `--last`/`--begin`/`--end`/`--count` are sent to
+match the documented request shape, but confirmed against a live server
+to have **no observable filtering effect** - every range tested
+(including deliberately absurd ones) returned the identical most-recent
+~20 samples. `subdevice events`' time filters are untested (no sub-device
+in the environment tested against had recorded events to verify with).
+
 ### OTA deployment
 
 Each package type follows the same workflow: `list` queries the repo
@@ -557,8 +603,9 @@ DeviceOn-EIM-v2.3.0.md; confirmed against a live server.
 ## Configuration
 
 `eim-skill` needs the DeviceOn-EIM server's base URL and login credentials,
-plus the repo server's base URL for OTA commands. These are read from, in
-increasing priority order:
+plus the repo server's base URL for OTA commands and the ithings server's
+base URL for `subdevice` commands. These are read from, in increasing
+priority order:
 
 1. `conf/config.yaml` (or the path given with `--config`):
    ```yaml
@@ -566,12 +613,33 @@ increasing priority order:
    username: admin
    password: admin
    repo_base_url: http://127.0.0.1:30001
+   ithings_base_url: http://127.0.0.1:8082
    ```
-2. Environment variables: `EIM_BASE_URL`, `EIM_USERNAME`, `EIM_PASSWORD`, `EIM_REPO_BASE_URL`
-3. Flags: `--base-url`, `--username`, `--password`, `--repo-base-url`
+2. Environment variables: `EIM_BASE_URL`, `EIM_USERNAME`, `EIM_PASSWORD`, `EIM_REPO_BASE_URL`, `EIM_ITHINGS_BASE_URL`
+3. Flags: `--base-url`, `--username`, `--password`, `--repo-base-url`, `--ithings-base-url`
 
-The repo server accepts the same `accesstoken` issued by the main server's
-`/login`, so no separate repo-server credentials are needed.
+The repo and ithings servers both accept the same `accesstoken` issued by
+the main server's `/login`, so no separate credentials are needed for
+either.
+
+### TLS trust (self-signed / internal CA servers)
+
+If `base_url` (or the repo/ithings URLs) uses `https://` with a certificate
+signed by an internal/private CA, requests fail with `x509: certificate
+signed by unknown authority`. Fix with one of:
+
+```yaml
+# Recommended: trust one additional CA (PEM file), everything else still verified.
+ca_cert_file: /path/to/internal-ca.pem
+
+# Or: skip TLS verification entirely - only use this on a network path you
+# already trust, since it removes protection against MITM attacks.
+insecure_skip_verify: true
+```
+
+Also available as env vars (`EIM_CA_CERT_FILE`, `EIM_INSECURE_SKIP_VERIFY`)
+or flags (`--ca-cert-file`, `--insecure`). `--insecure`/`insecure_skip_verify`
+takes precedence over `--ca-cert-file`/`ca_cert_file` when both are set.
 
 ## MCP server
 
@@ -614,9 +682,10 @@ via `conf/config.yaml`, environment variables, or pass extra CLI flags in
 ## Skills
 
 [`skills/`](skills/) has one `SKILL.md` per capability area (device
-management, device monitoring, logs/records, OTA deployment), each
-documenting when to use it and the exact commands - written for an agent
-(or a person) deciding which part of this CLI to reach for.
+management, device monitoring, logs/records, OTA deployment,
+sub-devices), each documenting when to use it and the exact commands -
+written for an agent (or a person) deciding which part of this CLI to
+reach for.
 
 ## How to build
 

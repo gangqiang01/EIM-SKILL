@@ -9,7 +9,32 @@ Wraps DeviceOn-EIM's device management REST API as `eim-skill device
 ...` / `eim-skill group ...` commands. Requires `eim-skill` to be built
 (`make` in the repo root) and `conf/config.yaml` (or `--base-url
 --username --password` flags / `EIM_*` env vars) pointing at a reachable
-DeviceOn-EIM server.
+DeviceOn-EIM server. If the server's base URL is `https://` with a
+certificate from an internal/private CA, an `x509: certificate signed by
+unknown authority` error means you need `ca_cert_file`/`--ca-cert-file`
+or `insecure_skip_verify`/`--insecure` (see repo README's "TLS trust"
+section).
+
+## Running the eim-skill binary / 如何运行 eim-skill 二进制
+
+Commands below are written as `../scripts/eim-skill ...`, assuming a
+Linux x86_64 host and this file's own directory as the working
+directory - the binary ships in a `scripts/` folder that sits alongside
+every skill folder (i.e. one level up from this file, at
+`../scripts/`), not on PATH. On a different host, substitute the
+matching binary name everywhere `../scripts/eim-skill` appears below:
+
+- Linux arm64/aarch64: `../scripts/eim-skill-arm64`
+- Windows: `../scripts/eim-skill.exe`
+
+下面的命令统一写成 `../scripts/eim-skill ...`，默认假设运行在 Linux
+x86_64 主机上，且执行时的工作目录就是这个文件所在的目录——二进制文件
+放在和每个技能目录同级的 `scripts/` 目录下（即这个文件所在目录的
+上一级，路径为 `../scripts/`），而不在 PATH 里。如果运行在其他平台，
+请把下面所有出现的 `../scripts/eim-skill` 替换成对应的二进制名：
+
+- Linux arm64/aarch64：`../scripts/eim-skill-arm64`
+- Windows：`../scripts/eim-skill.exe`
 
 ## When to use this skill
 
@@ -39,45 +64,45 @@ DeviceOn-EIM server.
 ## Commands
 
 ```
-eim-skill device list                                  # all devices
-eim-skill device list --group <group-name>             # devices in one group
-eim-skill device list --online                          # only online devices
-eim-skill device list --offline                          # only offline devices
-eim-skill device list --alarm                            # only devices with a software/hardware alarm
+../scripts/eim-skill device list                                  # all devices
+../scripts/eim-skill device list --group <group-name>             # devices in one group
+../scripts/eim-skill device list --online                          # only online devices
+../scripts/eim-skill device list --offline                          # only offline devices
+../scripts/eim-skill device list --alarm                            # only devices with a software/hardware alarm
   [--group <group-name>]                                 # any filter above can combine with --group
-eim-skill device counts                                  # online/offline device counts
-eim-skill device health                                  # online devices' status breakdown (normal/warning/error)
-eim-skill device get <endpoint-or-name>                        # full device record
-eim-skill device details <endpoint-or-name>                    # agent-reported system info (cpu/memory/storage/network)
-eim-skill device delete <endpoint-or-name>                     # delete a device
-eim-skill device add-to-group <endpoint-or-name> <group>        # add to a group (keeps existing memberships)
-eim-skill group list                                    # all device groups
-eim-skill group status [group-name]                     # groups' online/warning/error breakdown (all, or one)
-eim-skill group create <name> <type> [description] [--creator <username>]
+../scripts/eim-skill device counts                                  # online/offline device counts
+../scripts/eim-skill device health                                  # online devices' status breakdown (normal/warning/error)
+../scripts/eim-skill device get <endpoint-or-name>                        # full device record
+../scripts/eim-skill device details <endpoint-or-name>                    # agent-reported system info (cpu/memory/storage/network)
+../scripts/eim-skill device delete <endpoint-or-name>                     # delete a device
+../scripts/eim-skill device add-to-group <endpoint-or-name> <group>        # add to a group (keeps existing memberships)
+../scripts/eim-skill group list                                    # all device groups
+../scripts/eim-skill group status [group-name]                     # groups' online/warning/error breakdown (all, or one)
+../scripts/eim-skill group create <name> <type> [description] [--creator <username>]
   # type: typically "linux", "windows", "android", or "mix"
 
-eim-skill device reboot <endpoint-or-name>
-eim-skill device shutdown <endpoint-or-name>
-eim-skill device schedule reboot <endpoint-or-name> --at <datetime>          # schedule a future reboot
+../scripts/eim-skill device reboot <endpoint-or-name>
+../scripts/eim-skill device shutdown <endpoint-or-name>
+../scripts/eim-skill device schedule reboot <endpoint-or-name> --at <datetime>          # schedule a future reboot
   | --weekly <mon..sun> --time <HH:MM>                              # ...or repeating weekly
   | --monthly <1-31> --time <HH:MM>                                 # ...or repeating ~monthly
   | --cancel                                                        # cancel a pending schedule
-eim-skill device schedule shutdown <endpoint-or-name> ...           # same flags, for shutdown
-eim-skill device schedule get-reboot <endpoint-or-name>            # what's currently scheduled (reboot)
-eim-skill device schedule get-shutdown <endpoint-or-name>          # what's currently scheduled (shutdown)
-eim-skill device screenshot <endpoint-or-name> [<endpoint-or-name>...]      # capture and save a screenshot
+../scripts/eim-skill device schedule shutdown <endpoint-or-name> ...           # same flags, for shutdown
+../scripts/eim-skill device schedule get-reboot <endpoint-or-name>            # what's currently scheduled (reboot)
+../scripts/eim-skill device schedule get-shutdown <endpoint-or-name>          # what's currently scheduled (shutdown)
+../scripts/eim-skill device screenshot <endpoint-or-name> [<endpoint-or-name>...]      # capture and save a screenshot
   [--interval <ms>] [--out-dir <dir>] [--host <url>]               # (batch-capable - pass multiple devices at once)
-eim-skill device get-volume <endpoint-or-name>
-eim-skill device set-volume <endpoint-or-name> <0-100>
-eim-skill device get-backlight <endpoint-or-name>
-eim-skill device set-backlight <endpoint-or-name> <0-100>
-eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
-eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
-eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
-eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
-eim-skill device sync-time <endpoint-or-name>
+../scripts/eim-skill device get-volume <endpoint-or-name>
+../scripts/eim-skill device set-volume <endpoint-or-name> <0-100>
+../scripts/eim-skill device get-backlight <endpoint-or-name>
+../scripts/eim-skill device set-backlight <endpoint-or-name> <0-100>
+../scripts/eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
+../scripts/eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
+../scripts/eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
+../scripts/eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
+../scripts/eim-skill device sync-time <endpoint-or-name>
 
-eim-skill server get-config                                     # client-onboarding config blob (not device-scoped)
+../scripts/eim-skill server get-config                                     # client-onboarding config blob (not device-scoped)
 ```
 
 `<endpoint-or-name>` accepts either the device's endpoint id/MAC or its

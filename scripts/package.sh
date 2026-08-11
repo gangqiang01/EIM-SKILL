@@ -35,6 +35,15 @@ cp README.md README-zh.md "${STAGE_DIR}/"
 cp -r skills "${STAGE_DIR}/"
 cp "${binaries[@]}" "${STAGE_DIR}/"
 
+# Also copy the binaries into skills/scripts/, a sibling of every skill
+# folder - this is what each SKILL.md's "../scripts/eim-skill..." example
+# commands actually resolve to when a skill runner (e.g. workbuddy)
+# deploys the skills/ directory on its own, without the rest of this
+# tarball (so skills/ must be fully self-contained, not rely on the
+# top-level binary copies above).
+mkdir -p "${STAGE_DIR}/skills/scripts"
+cp "${binaries[@]}" "${STAGE_DIR}/skills/scripts/"
+
 # Ship a placeholder config template, never the real conf/config.yaml
 # (which may hold a live internal server address/credentials) - the
 # recipient copies this to config.yaml and fills in their own values.

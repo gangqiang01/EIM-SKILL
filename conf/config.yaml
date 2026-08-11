@@ -2,3 +2,16 @@ base_url: https://eim.advantech.com.cn
 username: admin
 password: Admin@2025
 repo_base_url: https://eim.advantech.com.cn:30001
+ithings_base_url: http://eim.advantech.com.cn:8082
+
+# eim.advantech.com.cn 的证书由内部私有 CA 签发，不在系统信任链中，
+# 会导致 "x509: certificate signed by unknown authority" 报错。
+# 两种解决方式二选一：
+#
+# 1) 推荐：把内部 CA 的证书（PEM 格式）存到本地，通过 ca_cert_file 指定，
+#    这样只信任这一个 CA，其余校验都正常进行。
+# ca_cert_file: /path/to/internal-ca.pem
+#
+# 2) 仅在明确信任该网络路径时使用：完全跳过证书校验（不安全，会失去
+#    对该连接的中间人攻击防护）。
+insecure_skip_verify: true

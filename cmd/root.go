@@ -8,16 +8,20 @@ import (
 
 	"github.com/gangqiang01/EIM-SKILL/internal/apphub"
 	"github.com/gangqiang01/EIM-SKILL/internal/config"
+	"github.com/gangqiang01/EIM-SKILL/internal/ithings"
 	"github.com/gangqiang01/EIM-SKILL/internal/repo"
 	"github.com/spf13/cobra"
 )
 
 var (
-	cfgFile     string
-	baseURL     string
-	username    string
-	password    string
-	repoBaseURL string
+	cfgFile        string
+	baseURL        string
+	username       string
+	password       string
+	repoBaseURL    string
+	ithingsBaseURL string
+	caCertFile     string
+	tlsInsecure    bool
 )
 
 // version/commit/buildDate are overridden at build time via
@@ -113,6 +117,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&username, "username", "", "login username (overrides config file) - 登录用户名（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&password, "password", "", "login password (overrides config file) - 登录密码（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&repoBaseURL, "repo-base-url", "", "repo server (m2m-management-edge) base URL (overrides config file, e.g. http://127.0.0.1:30001) - 软件包仓库服务地址（覆盖配置文件）")
+	rootCmd.PersistentFlags().StringVar(&ithingsBaseURL, "ithings-base-url", "", "sub-device/twin server (apphub-ithings) base URL (overrides config file, e.g. http://127.0.0.1:8082) - 子设备/数字孪生服务地址（覆盖配置文件）")
+	rootCmd.PersistentFlags().StringVar(&caCertFile, "ca-cert-file", "", "PEM file of CA certificate(s) to trust, for servers using an internal/private CA (overrides config file) - 信任的 CA 证书文件（覆盖配置文件），用于服务器证书由内部私有 CA 签发的场景")
+	rootCmd.PersistentFlags().BoolVar(&tlsInsecure, "insecure", false, "skip TLS certificate verification entirely (overrides config file; takes precedence over --ca-cert-file) - 完全跳过 TLS 证书校验（覆盖配置文件，优先级高于 --ca-cert-file），仅在信任该网络路径时使用")
 }
 
 // loadConfig loads configuration (file + env + flags, in increasing priority).
@@ -134,6 +141,15 @@ func loadConfig() (*config.Config, error) {
 	if repoBaseURL != "" {
 		cfg.RepoBaseURL = repoBaseURL
 	}
+	if ithingsBaseURL != "" {
+		cfg.IthingsBaseURL = ithingsBaseURL
+	}
+	if caCertFile != "" {
+		cfg.CACertFile = caCertFile
+	}
+	if tlsInsecure {
+		cfg.InsecureSkipVerify = true
+	}
 
 	return cfg, nil
 }
@@ -144,7 +160,11 @@ func newClient() (*apphub.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return apphub.NewClient(cfg.BaseURL, cfg.Username, cfg.Password), nil
+	httpClient, err := config.NewHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return apphub.NewClient(cfg.BaseURL, cfg.Username, cfg.Password, httpClient), nil
 }
 
 // newRepoClient loads configuration and returns a repo server client that
@@ -154,7 +174,25 @@ func newRepoClient(appClient *apphub.Client) (*repo.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return repo.NewClient(cfg.RepoBaseURL, appClient), nil
+	httpClient, err := config.NewHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return repo.NewClient(cfg.RepoBaseURL, appClient, httpClient), nil
+}
+
+// newIthingsClient loads configuration and returns a sub-device/twin
+// server client that authenticates by reusing appClient's AppHub session.
+func newIthingsClient(appClient *apphub.Client) (*ithings.Client, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	httpClient, err := config.NewHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return ithings.NewClient(cfg.IthingsBaseURL, appClient, httpClient), nil
 }
 
 // resolveDeviceEndpoint finds the device matching identifier - its

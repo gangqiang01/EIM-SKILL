@@ -401,6 +401,47 @@ DeviceOn-EIM-v2.3.0.md 中记录——通过真实抓包反推得到，确认接
 已归一化成真正的JSON数字——服务器返回的是数字字符串（如
 `"level":"4"`），已用真实服务器验证过。
 
+### 子设备
+
+```
+eim-skill subdevice list [--parent <endpoint-or-name>]              # 列出子设备，可选只看某个父设备下的
+eim-skill subdevice get <device-id-or-name> [--service <名称>] [--property <名称>]  # 获取服务/属性列表 + 当前实时值（"数字孪生"）
+eim-skill subdevice history <device-id-or-name> <service-name> <property-name>
+  [--last <30m|12h|3d>] [--begin <时间>] [--end <时间>] [--count N]
+eim-skill subdevice events <device-id-or-name> [--page N] [--limit N]
+  [--last <30m|12h|3d>] [--begin <时间>] [--end <时间>]
+```
+
+子设备是注册在某个父设备（DeviceOn-EIM 管理的普通设备，即"edge"）下的
+物模型设备，通过 Modbus/SNMP/executor/restful 等协议接入——每个子设备
+上报若干属性（按"服务"分组），也可以上报事件。这是一套独立的只读查询
+能力，由 `apphub-ithings` 服务提供（有自己的地址配置项
+`--ithings-base-url`/`ithings_base_url`，默认
+`http://127.0.0.1:8082`）——其中大部分接口未在 DeviceOn-EIM-v2.3.0.md
+中记录（只有子设备列表、数字孪生、历史数据这三个有文档；`events` 完全
+未记录），已通过真实抓包在真实服务器上验证过。它接受和主服务器
+`/login` 相同的 accesstoken，不需要单独登录。
+
+`subdevice get` 同时承担"发现有哪些服务/属性"的作用：这里没有单独
+封装"只看结构不看数据"的接口，所以"数字孪生"（每个上报过的属性及其
+当前值）也是用来查找 `service-name`/`property-name` 组合（供
+`subdevice history` 使用）的方式。`<device-id-or-name>` 可以是子设备的
+id，也可以是名称——但和父设备的 endpoint/devName 不同，子设备的名称
+在不同父设备之间并不保证唯一，如果名称有歧义会报错并列出所有候选项，
+而不是随便选一个。
+
+`subdevice get` 的 `--service`/`--property` 用来在客户端缩小"数字孪生"
+的范围（底层接口本身不支持按这两个条件过滤，总是返回全部已上报的
+属性）——两者都指定时，如果找到唯一匹配，直接返回这一个属性对象
+（不再包在列表里）；如果指定的 服务+属性 组合当前没有值，则报错。
+只指定其中一个时，返回所有匹配项组成的列表。
+
+`subdevice history` 的 `--last`/`--begin`/`--end`/`--count` 会按照文档
+里的请求格式发送，但已用真实服务器验证：**目前没有任何可观察到的
+过滤效果**——无论传入什么范围（包括故意构造的极端范围）返回的都是
+同样的最近约20条数据。`subdevice events` 的时间过滤参数未经验证（测试
+环境里没有子设备有真实的事件记录可供验证）。
+
 ### OTA 部署
 
 每种软件包类型都遵循相同的流程：`list` 命令查询软件仓库
@@ -502,7 +543,8 @@ DeviceOn-EIM-v2.3.0.md 中记录；已用真实服务器验证过。
 ## 配置
 
 `eim-skill` 需要 DeviceOn-EIM 服务器的地址和登录凭证，OTA 相关命令还
-需要软件仓库服务的地址。配置按以下优先级从低到高读取：
+需要软件仓库服务的地址，`subdevice` 相关命令还需要 ithings 服务的
+地址。配置按以下优先级从低到高读取：
 
 1. `conf/config.yaml`（或通过 `--config` 指定的路径）：
    ```yaml
@@ -510,12 +552,33 @@ DeviceOn-EIM-v2.3.0.md 中记录；已用真实服务器验证过。
    username: admin
    password: admin
    repo_base_url: http://127.0.0.1:30001
+   ithings_base_url: http://127.0.0.1:8082
    ```
-2. 环境变量：`EIM_BASE_URL`、`EIM_USERNAME`、`EIM_PASSWORD`、`EIM_REPO_BASE_URL`
-3. 命令行参数：`--base-url`、`--username`、`--password`、`--repo-base-url`
+2. 环境变量：`EIM_BASE_URL`、`EIM_USERNAME`、`EIM_PASSWORD`、`EIM_REPO_BASE_URL`、`EIM_ITHINGS_BASE_URL`
+3. 命令行参数：`--base-url`、`--username`、`--password`、`--repo-base-url`、`--ithings-base-url`
 
-软件仓库服务接受和主服务器 `/login` 签发的同一个 `accesstoken`，因此
-不需要单独配置仓库服务的登录凭证。
+软件仓库服务和 ithings 服务都接受和主服务器 `/login` 签发的同一个
+`accesstoken`，因此都不需要单独配置登录凭证。
+
+### TLS 证书信任（自签名 / 内部 CA 证书的服务器）
+
+如果 `base_url`（或软件仓库/ithings 服务地址）使用 `https://`，且证书由
+内部私有 CA 签发，请求会报错 `x509: certificate signed by unknown
+authority`。可以用以下两种方式之一解决：
+
+```yaml
+# 推荐：额外信任一个 CA（PEM 文件），其余校验照常进行。
+ca_cert_file: /path/to/internal-ca.pem
+
+# 或者：完全跳过证书校验 —— 仅在明确信任该网络路径时使用，
+# 因为这会失去对该连接的中间人攻击防护。
+insecure_skip_verify: true
+```
+
+也可以通过环境变量（`EIM_CA_CERT_FILE`、`EIM_INSECURE_SKIP_VERIFY`）或
+命令行参数（`--ca-cert-file`、`--insecure`）设置。同时设置时，
+`--insecure`/`insecure_skip_verify` 优先级高于
+`--ca-cert-file`/`ca_cert_file`。
 
 ## MCP 服务器模式
 
@@ -557,8 +620,8 @@ eim-skill mcp
 ## Skills（技能文档）
 
 [`skills/`](skills/) 目录下每个能力领域对应一个 `SKILL.md`（设备管理、
-设备监控、日志/记录、OTA部署），分别说明什么场景下该用它、以及具体的
-命令——是写给 Agent（或人）在决定该用本CLI的哪部分功能时参考的。
+设备监控、日志/记录、OTA部署、子设备），分别说明什么场景下该用它、以及
+具体的命令——是写给 Agent（或人）在决定该用本CLI的哪部分功能时参考的。
 
 ## 如何构建
 
