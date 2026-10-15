@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -111,8 +113,45 @@ func requireArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
+// defaultConfigPath picks --config's default. "conf/config.yaml" relative
+// to the current working directory (matching running eim-skill from the
+// repo root during development) if that file actually exists there;
+// otherwise the same filename next to the running binary itself, if that
+// exists instead.
+//
+// The second case matters for a packaged release: every skill's example
+// commands invoke the binary via a relative "../../eim-skill" from the
+// skill's own subfolder, so the process's cwd is that subfolder, not the
+// package root - a plain cwd-relative "conf/config.yaml" then silently
+// misses the real config file (which sits at the package root, next to
+// the binary) and falls back to built-in localhost defaults instead of
+// erroring or connecting to the real server, confirmed via a real bug
+// report. Falling back further to the plain "conf/config.yaml" literal
+// when neither resolves keeps prior behavior (and its existing graceful
+// "file not found" handling in config.Load) for every other case.
+func defaultConfigPath() string {
+	const name = "conf/config.yaml"
+	if fileExists(name) {
+		return name
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		if exeRelative := filepath.Join(filepath.Dir(exe), name); fileExists(exeRelative) {
+			return exeRelative
+		}
+	}
+	return name
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "conf/config.yaml", "config file path (配置文件路径)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath(), "config file path (配置文件路径)")
 	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "DeviceOn-EIM server base URL (overrides config file, e.g. http://127.0.0.1:30010) - 服务器地址（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&username, "username", "", "login username (overrides config file) - 登录用户名（覆盖配置文件）")
 	rootCmd.PersistentFlags().StringVar(&password, "password", "", "login password (overrides config file) - 登录密码（覆盖配置文件）")

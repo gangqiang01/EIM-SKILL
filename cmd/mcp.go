@@ -280,6 +280,50 @@ func buildArgs(spec *toolSpec, input map[string]any) ([]string, error) {
 // are package-level singletons reused across every MCP tool call, so without
 // this a flag set on one call (e.g. --group=foo) would silently leak into
 // the next call that omits it.
+type flagState struct {
+	value   string
+	changed bool
+}
+
+func snapshotCommandTree(cmd *cobra.Command) map[string]flagState {
+	snapshot := make(map[string]flagState)
+	take := func(fs *pflag.FlagSet, cmdName string) {
+		fs.VisitAll(func(f *pflag.Flag) {
+			snapshot[cmdName+"::"+f.Name] = flagState{
+				value:   f.Value.String(),
+				changed: f.Changed,
+			}
+		})
+	}
+
+	take(cmd.Flags(), cmd.CommandPath())
+	take(cmd.PersistentFlags(), cmd.CommandPath())
+	for _, c := range cmd.Commands() {
+		for k, v := range snapshotCommandTree(c) {
+			snapshot[k] = v
+		}
+	}
+	return snapshot
+}
+
+func restoreCommandTree(cmd *cobra.Command, snapshot map[string]flagState) {
+	restore := func(fs *pflag.FlagSet, cmdName string) {
+		fs.VisitAll(func(f *pflag.Flag) {
+			state, ok := snapshot[cmdName+"::"+f.Name]
+			if !ok {
+				return
+			}
+			_ = f.Value.Set(state.value)
+			f.Changed = state.changed
+		})
+	}
+	restore(cmd.Flags(), cmd.CommandPath())
+	restore(cmd.PersistentFlags(), cmd.CommandPath())
+	for _, c := range cmd.Commands() {
+		restoreCommandTree(c, snapshot)
+	}
+}
+
 func resetCommandTree(cmd *cobra.Command) {
 	reset := func(fs *pflag.FlagSet) {
 		fs.VisitAll(func(f *pflag.Flag) {
@@ -321,14 +365,20 @@ func invokeCommand(spec *toolSpec, input map[string]any) string {
 		return withCapturedOutput(func() { printErrorResult(err) })
 	}
 
+	startup := snapshotCommandTree(rootCmd)
 	resetCommandTree(rootCmd)
+	restoreCommandTree(rootCmd, startup)
 	rootCmd.SetArgs(args)
 
-	return withCapturedOutput(func() {
+	result := withCapturedOutput(func() {
 		if err := rootCmd.Execute(); err != nil {
 			printErrorResult(err)
 		}
 	})
+
+	resetCommandTree(rootCmd)
+	restoreCommandTree(rootCmd, startup)
+	return result
 }
 
 func runMCPServer() error {

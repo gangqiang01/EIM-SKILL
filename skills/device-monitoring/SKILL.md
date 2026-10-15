@@ -1,6 +1,6 @@
 ---
 name: device-monitoring
-description: Read and configure a DeviceOn-EIM device's monitoring and alerting - a live CPU/memory/storage/battery/network snapshot, CPU/memory/storage/network/battery thresholds, application/process monitoring, Docker container monitoring, USB peripheral change monitoring, and historical CPU/memory samples. Use this whenever the user asks about a device's resource usage, alert thresholds, or wants to turn monitoring of some subsystem on/off via the eim-skill CLI. 中文触发词：设备监控、监控详情、CPU监控、内存监控、存储监控、网络监控、告警阈值、阈值设置、进程监控、应用监控、Docker监控、容器监控、USB外设监控。
+description: Read and configure a DeviceOn-EIM device's monitoring and alerting - a live CPU/memory/storage/battery/network snapshot, CPU/memory/storage/network/battery thresholds, application/process monitoring, Docker container monitoring, USB peripheral change monitoring, historical CPU/memory samples, and recorded alert history (hardware/software/peripheral). Use this whenever the user asks about a device's resource usage, alert thresholds, past alerts/alarms, or wants to turn monitoring of some subsystem on/off via the eim-skill CLI. 中文触发词：设备监控、监控详情、CPU监控、内存监控、存储监控、网络监控、告警阈值、阈值设置、进程监控、应用监控、Docker监控、容器监控、USB外设监控、告警历史、告警记录、历史告警。
 ---
 
 # Device monitoring and alerting
@@ -12,24 +12,24 @@ configured (see repo README).
 
 ## Running the eim-skill binary / 如何运行 eim-skill 二进制
 
-Commands below are written as `../scripts/eim-skill ...`, assuming a
+Commands below are written as `../../eim-skill ...`, assuming a
 Linux x86_64 host and this file's own directory as the working
-directory - the binary ships in a `scripts/` folder that sits alongside
-every skill folder (i.e. one level up from this file, at
-`../scripts/`), not on PATH. On a different host, substitute the
-matching binary name everywhere `../scripts/eim-skill` appears below:
+directory - the binary ships at the package root, two levels up from
+this file (`../../`), alongside `conf/`; there is no separate copy under
+a `scripts/` folder. On a different host, substitute the matching
+binary name everywhere `../../eim-skill` appears below:
 
-- Linux arm64/aarch64: `../scripts/eim-skill-arm64`
-- Windows: `../scripts/eim-skill.exe`
+- Linux arm64/aarch64: `../../eim-skill-arm64`
+- Windows: `../../eim-skill.exe`
 
-下面的命令统一写成 `../scripts/eim-skill ...`，默认假设运行在 Linux
+下面的命令统一写成 `../../eim-skill ...`，默认假设运行在 Linux
 x86_64 主机上，且执行时的工作目录就是这个文件所在的目录——二进制文件
-放在和每个技能目录同级的 `scripts/` 目录下（即这个文件所在目录的
-上一级，路径为 `../scripts/`），而不在 PATH 里。如果运行在其他平台，
-请把下面所有出现的 `../scripts/eim-skill` 替换成对应的二进制名：
+放在包根目录下（即这个文件所在目录的上两级，路径为 `../../`），和
+`conf/` 同级，不再单独放一份 `scripts/` 目录的副本。如果运行在其他
+平台，请把下面所有出现的 `../../eim-skill` 替换成对应的二进制名：
 
-- Linux arm64/aarch64：`../scripts/eim-skill-arm64`
-- Windows：`../scripts/eim-skill.exe`
+- Linux arm64/aarch64：`../../eim-skill-arm64`
+- Windows：`../../eim-skill.exe`
 
 ## When to use this skill
 
@@ -53,30 +53,30 @@ x86_64 主机上，且执行时的工作目录就是这个文件所在的目录�
 ## Commands
 
 ```
-../scripts/eim-skill device get-monitor <endpoint-or-name>                          # live cpu/memory/storage/battery/network snapshot
+../../eim-skill device get-monitor <endpoint-or-name>                          # live cpu/memory/storage/battery/network snapshot
 
-../scripts/eim-skill device threshold get <endpoint-or-name>
-../scripts/eim-skill device threshold set <endpoint-or-name> <metric> <on|off> [--warn N] [--error N]
+../../eim-skill device threshold get <endpoint-or-name>
+../../eim-skill device threshold set <endpoint-or-name> <metric> <on|off> [--warn N] [--error N]
   # metric: cpu_temp, cpu_usage, memory_usage, storage_usage,
   #         battery_available, network_upload_speed, network_download_speed
 
-../scripts/eim-skill device process list <endpoint-or-name>
-../scripts/eim-skill device process monitored <endpoint-or-name>
-../scripts/eim-skill device process set-monitor <endpoint-or-name> <pid> <on|off>
+../../eim-skill device process list <endpoint-or-name>
+../../eim-skill device process monitored <endpoint-or-name>
+../../eim-skill device process set-monitor <endpoint-or-name> <pid> <on|off>
 
-../scripts/eim-skill device docker list <endpoint-or-name>
-../scripts/eim-skill device docker monitored <endpoint-or-name>
-../scripts/eim-skill device docker set-monitor <endpoint-or-name> <container-name> <on|off>
+../../eim-skill device docker list <endpoint-or-name>
+../../eim-skill device docker monitored <endpoint-or-name>
+../../eim-skill device docker set-monitor <endpoint-or-name> <container-name> <on|off>
 
-../scripts/eim-skill device usb get-monitor <endpoint-or-name>                      # is USB change-alerting on?
-../scripts/eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB change-alerting on/off
-../scripts/eim-skill device usb get-storage <endpoint-or-name>                      # is USB mass-storage device access enabled?
-../scripts/eim-skill device usb set-storage <endpoint-or-name> <on|off>             # USB mass-storage device access on/off
+../../eim-skill device usb get-monitor <endpoint-or-name>                      # is USB change-alerting on?
+../../eim-skill device usb set-monitor <endpoint-or-name> <on|off>             # USB change-alerting on/off
+../../eim-skill device usb get-storage <endpoint-or-name>                      # is USB mass-storage device access enabled?
+../../eim-skill device usb set-storage <endpoint-or-name> <on|off>             # USB mass-storage device access on/off
 
-../scripts/eim-skill device monitor <endpoint-or-name> --type cpu|memory [--last <30m|12h|3d>]
+../../eim-skill device monitor <endpoint-or-name> --type cpu|memory [--last <30m|12h|3d>]
   # or an absolute range instead of --last: [--begin <time>] [--end <time>]
-../scripts/eim-skill device get-monitor-report <endpoint-or-name>
-../scripts/eim-skill device set-monitor-report <endpoint-or-name> <cpu|memory> <on|off>
+../../eim-skill device get-monitor-report <endpoint-or-name>
+../../eim-skill device set-monitor-report <endpoint-or-name> <cpu|memory> <on|off>
 ```
 
 `<endpoint-or-name>` accepts either the device's endpoint id or its

@@ -250,6 +250,51 @@ func optionalMillis(ms int64) string {
 	return strconv.FormatInt(ms, 10)
 }
 
+// alertHistoryPage is GET /v1/alertHistory/byPage/condition's assumed data
+// shape - not confirmed against a live server with real alert data (the
+// only test server available during development rejected every credential
+// tried against it), so this mirrors ListDeviceEvents' sibling endpoint
+// (same server, same byPage+currentPage/limit paging, same edgeId/
+// beginTs/endTs filter shape seen in a real request URL) as a best-effort
+// guess rather than a verified one. List entries are kept as raw JSON
+// rather than a typed struct for the same reason.
+type alertHistoryPage struct {
+	List  []json.RawMessage `json:"list"`
+	Total int64             `json:"total"`
+}
+
+// ListAlertHistory returns one page of a device's ("edge's") recorded
+// alert-history entries - hardware/software/peripheral alerts raised
+// against it - plus the total count across all pages. edgeID is the
+// parent device's endpoint id (not a sub-device id). level and alertType
+// are opaque server-defined filters passed through as-is (empty string
+// leaves either unset); alertType is expected to include "hardware",
+// "software", and "peripheral" going by a real request URL, but the full
+// accepted set for either parameter isn't confirmed. beginTs/endTs are
+// Unix-millisecond bounds (0 leaves that bound unset).
+//
+// CAVEAT: not documented in AppHub-v2.3.0.md; the endpoint path and query
+// parameter names come from a real request URL, but no populated response
+// was available to verify the shape below - see alertHistoryPage's
+// comment. Verify against a live server before relying on the exact
+// field names of returned entries.
+func (c *Client) ListAlertHistory(edgeID string, page, limit int, level, alertType string, beginTs, endTs int64) ([]json.RawMessage, int64, error) {
+	q := url.Values{}
+	q.Set("currentPage", strconv.Itoa(page))
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("edgeId", edgeID)
+	q.Set("level", level)
+	q.Set("type", alertType)
+	q.Set("beginTs", optionalMillis(beginTs))
+	q.Set("endTs", optionalMillis(endTs))
+
+	var result alertHistoryPage
+	if err := c.do("/v1/alertHistory/byPage/condition?"+q.Encode(), &result); err != nil {
+		return nil, 0, err
+	}
+	return result.List, result.Total, nil
+}
+
 // deviceEventPage is GET /v1/deviceEvent/byPage's data shape - not
 // documented in AppHub-v2.3.0.md at all, confirmed against a live server
 // via a real packet capture. List's element shape is kept as raw JSON:

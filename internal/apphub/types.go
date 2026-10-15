@@ -300,6 +300,17 @@ type monitorListValue struct {
 	PkgName    []json.RawMessage `json:"pkgname"`
 }
 
+// dockerContainerControlValue is the write-value shape for per-container
+// Docker runtime control on one device via /api/devicemgr/{agentId}/60002/0/{id},
+// where id maps to start/stop/restart. pkgname carries the container name;
+// version and taskname are fixed placeholders per server behavior.
+type dockerContainerControlValue struct {
+	PkgName string `json:"pkgname"`
+	Version string `json:"version"`
+	TaskName string `json:"taskname"`
+	Target  string `json:"target"`
+}
+
 // execBatchRequest is the body for the batch-execute devicecontrol
 // resource (PUT /api/plugins/batchExec/40008/0/27601), used to
 // reboot/shutdown/set-volume/set-backlight an explicit list of devices at

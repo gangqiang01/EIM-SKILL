@@ -35,14 +35,17 @@ cp README.md README-zh.md "${STAGE_DIR}/"
 cp -r skills "${STAGE_DIR}/"
 cp "${binaries[@]}" "${STAGE_DIR}/"
 
-# Also copy the binaries into skills/scripts/, a sibling of every skill
-# folder - this is what each SKILL.md's "../scripts/eim-skill..." example
-# commands actually resolve to when a skill runner (e.g. workbuddy)
-# deploys the skills/ directory on its own, without the rest of this
-# tarball (so skills/ must be fully self-contained, not rely on the
-# top-level binary copies above).
-mkdir -p "${STAGE_DIR}/skills/scripts"
-cp "${binaries[@]}" "${STAGE_DIR}/skills/scripts/"
+# Binaries are NOT duplicated under skills/scripts/ - each SKILL.md's
+# "../../eim-skill..." example commands resolve straight to the top-level
+# binary copies above (two levels up from a skill's own folder,
+# skills/<name>/../../ = this package's root). An earlier version instead
+# duplicated the binaries into skills/scripts/ and had SKILL.md commands
+# use "../scripts/eim-skill...", but conf/config.yaml (below) was never
+# duplicated alongside that copy, so eim-skill's default --config
+# "conf/config.yaml" - resolved relative to the working directory, not the
+# binary's location - silently missed it whenever a skill runner's cwd was
+# a skill's own folder, falling back to the wrong built-in defaults
+# instead of erroring.
 
 # Ship a placeholder config template, never the real conf/config.yaml
 # (which may hold a live internal server address/credentials) - the

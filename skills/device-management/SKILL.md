@@ -17,24 +17,24 @@ section).
 
 ## Running the eim-skill binary / 如何运行 eim-skill 二进制
 
-Commands below are written as `../scripts/eim-skill ...`, assuming a
+Commands below are written as `../../eim-skill ...`, assuming a
 Linux x86_64 host and this file's own directory as the working
-directory - the binary ships in a `scripts/` folder that sits alongside
-every skill folder (i.e. one level up from this file, at
-`../scripts/`), not on PATH. On a different host, substitute the
-matching binary name everywhere `../scripts/eim-skill` appears below:
+directory - the binary ships at the package root, two levels up from
+this file (`../../`), alongside `conf/`; there is no separate copy under
+a `scripts/` folder. On a different host, substitute the matching
+binary name everywhere `../../eim-skill` appears below:
 
-- Linux arm64/aarch64: `../scripts/eim-skill-arm64`
-- Windows: `../scripts/eim-skill.exe`
+- Linux arm64/aarch64: `../../eim-skill-arm64`
+- Windows: `../../eim-skill.exe`
 
-下面的命令统一写成 `../scripts/eim-skill ...`，默认假设运行在 Linux
+下面的命令统一写成 `../../eim-skill ...`，默认假设运行在 Linux
 x86_64 主机上，且执行时的工作目录就是这个文件所在的目录——二进制文件
-放在和每个技能目录同级的 `scripts/` 目录下（即这个文件所在目录的
-上一级，路径为 `../scripts/`），而不在 PATH 里。如果运行在其他平台，
-请把下面所有出现的 `../scripts/eim-skill` 替换成对应的二进制名：
+放在包根目录下（即这个文件所在目录的上两级，路径为 `../../`），和
+`conf/` 同级，不再单独放一份 `scripts/` 目录的副本。如果运行在其他
+平台，请把下面所有出现的 `../../eim-skill` 替换成对应的二进制名：
 
-- Linux arm64/aarch64：`../scripts/eim-skill-arm64`
-- Windows：`../scripts/eim-skill.exe`
+- Linux arm64/aarch64：`../../eim-skill-arm64`
+- Windows：`../../eim-skill.exe`
 
 ## When to use this skill
 
@@ -52,6 +52,7 @@ x86_64 主机上，且执行时的工作目录就是这个文件所在的目录�
 - "Take a screenshot of device X (or devices X, Y, Z)" / "给设备X截屏" / "给X、Y、Z这几台设备截屏" → `device screenshot` (pass multiple devices in one call rather than looping)
 - "Turn the volume/screen brightness up/down on device X" / "设置设备X的音量" / "设置设备X的背光/亮度" → `device set-volume` / `device set-backlight`
 - "What's device X's current volume/backlight set to?" / "查看设备X当前的音量/背光" → `device get-volume` / `device get-backlight`
+- "Start/stop/restart Docker container C on device X" / "启动/停止/重启设备X上的Docker容器C" / "重启容器" → `device docker start` / `device docker stop` / `device docker restart`
 - "Reboot / shut down every device in group Y" / "重启设备组Y下所有设备" / "给设备组Y批量关机" → confirm with the user first (state how many/which devices this affects), then `device reboot-group` / `device shutdown-group`
 - "Set the volume/brightness for every device in group Y" / "给设备组Y批量设置音量/背光" → `device set-volume-group` / `device set-backlight-group`
 - "Sync the clock on device X" / "同步设备X的时间" → `device sync-time`
@@ -64,45 +65,48 @@ x86_64 主机上，且执行时的工作目录就是这个文件所在的目录�
 ## Commands
 
 ```
-../scripts/eim-skill device list                                  # all devices
-../scripts/eim-skill device list --group <group-name>             # devices in one group
-../scripts/eim-skill device list --online                          # only online devices
-../scripts/eim-skill device list --offline                          # only offline devices
-../scripts/eim-skill device list --alarm                            # only devices with a software/hardware alarm
+../../eim-skill device list                                  # all devices
+../../eim-skill device list --group <group-name>             # devices in one group
+../../eim-skill device list --online                          # only online devices
+../../eim-skill device list --offline                          # only offline devices
+../../eim-skill device list --alarm                            # only devices with a software/hardware alarm (e.g. stopped monitored process/docker, or CPU/memory/disk threshold exceeded)
   [--group <group-name>]                                 # any filter above can combine with --group
-../scripts/eim-skill device counts                                  # online/offline device counts
-../scripts/eim-skill device health                                  # online devices' status breakdown (normal/warning/error)
-../scripts/eim-skill device get <endpoint-or-name>                        # full device record
-../scripts/eim-skill device details <endpoint-or-name>                    # agent-reported system info (cpu/memory/storage/network)
-../scripts/eim-skill device delete <endpoint-or-name>                     # delete a device
-../scripts/eim-skill device add-to-group <endpoint-or-name> <group>        # add to a group (keeps existing memberships)
-../scripts/eim-skill group list                                    # all device groups
-../scripts/eim-skill group status [group-name]                     # groups' online/warning/error breakdown (all, or one)
-../scripts/eim-skill group create <name> <type> [description] [--creator <username>]
+../../eim-skill device counts                                  # online/offline device counts
+../../eim-skill device health                                  # online devices' status breakdown (normal/warning/error)
+../../eim-skill device get <endpoint-or-name>                        # full device record
+../../eim-skill device details <endpoint-or-name>                    # agent-reported system info (cpu/memory/storage/network)
+../../eim-skill device delete <endpoint-or-name>                     # delete a device
+../../eim-skill device add-to-group <endpoint-or-name> <group>        # add to a group (keeps existing memberships)
+../../eim-skill group list                                    # all device groups
+../../eim-skill group status [group-name]                     # groups' online/warning/error breakdown (all, or one)
+../../eim-skill group create <name> <type> [description] [--creator <username>]
   # type: typically "linux", "windows", "android", or "mix"
 
-../scripts/eim-skill device reboot <endpoint-or-name>
-../scripts/eim-skill device shutdown <endpoint-or-name>
-../scripts/eim-skill device schedule reboot <endpoint-or-name> --at <datetime>          # schedule a future reboot
+../../eim-skill device reboot <endpoint-or-name>
+../../eim-skill device shutdown <endpoint-or-name>
+../../eim-skill device schedule reboot <endpoint-or-name> --at <datetime>          # schedule a future reboot
   | --weekly <mon..sun> --time <HH:MM>                              # ...or repeating weekly
   | --monthly <1-31> --time <HH:MM>                                 # ...or repeating ~monthly
   | --cancel                                                        # cancel a pending schedule
-../scripts/eim-skill device schedule shutdown <endpoint-or-name> ...           # same flags, for shutdown
-../scripts/eim-skill device schedule get-reboot <endpoint-or-name>            # what's currently scheduled (reboot)
-../scripts/eim-skill device schedule get-shutdown <endpoint-or-name>          # what's currently scheduled (shutdown)
-../scripts/eim-skill device screenshot <endpoint-or-name> [<endpoint-or-name>...]      # capture and save a screenshot
+../../eim-skill device schedule shutdown <endpoint-or-name> ...           # same flags, for shutdown
+../../eim-skill device schedule get-reboot <endpoint-or-name>            # what's currently scheduled (reboot)
+../../eim-skill device schedule get-shutdown <endpoint-or-name>          # what's currently scheduled (shutdown)
+../../eim-skill device screenshot <endpoint-or-name> [<endpoint-or-name>...]      # capture and save a screenshot
   [--interval <ms>] [--out-dir <dir>] [--host <url>]               # (batch-capable - pass multiple devices at once)
-../scripts/eim-skill device get-volume <endpoint-or-name>
-../scripts/eim-skill device set-volume <endpoint-or-name> <0-100>
-../scripts/eim-skill device get-backlight <endpoint-or-name>
-../scripts/eim-skill device set-backlight <endpoint-or-name> <0-100>
-../scripts/eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
-../scripts/eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
-../scripts/eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
-../scripts/eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
-../scripts/eim-skill device sync-time <endpoint-or-name>
+../../eim-skill device get-volume <endpoint-or-name>
+../../eim-skill device set-volume <endpoint-or-name> <0-100>
+../../eim-skill device get-backlight <endpoint-or-name>
+../../eim-skill device set-backlight <endpoint-or-name> <0-100>
+../../eim-skill device docker start <endpoint-or-name> <container-name>         # start one container
+../../eim-skill device docker stop <endpoint-or-name> <container-name>          # stop one container
+../../eim-skill device docker restart <endpoint-or-name> <container-name>       # restart one container
+../../eim-skill device reboot-group <group-name> [--label <name>]         # reboot every device in a group
+../../eim-skill device shutdown-group <group-name> [--label <name>]       # shut down every device in a group
+../../eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
+../../eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
+../../eim-skill device sync-time <endpoint-or-name>
 
-../scripts/eim-skill server get-config                                     # client-onboarding config blob (not device-scoped)
+../../eim-skill server get-config                                     # client-onboarding config blob (not device-scoped)
 ```
 
 `<endpoint-or-name>` accepts either the device's endpoint id/MAC or its
@@ -148,9 +152,10 @@ every device-targeting command resolves it against the live device list.
   each result's `status` field, don't assume all devices succeeded just
   because the command exited 0.
 - Every device object from `device list`/`device get` includes
-  `deviceStatusText` (`"normal"`/`"warning"`/`"error"`) alongside the raw
-  numeric `deviceStatus` (0/1/2, the same code `device list --alarm`
-  filters on) - translated so you don't need to know the mapping.
+  `deviceStatusText` (`"normal"`/`"warning"`/`"error"`, where `"error"`
+  corresponds to 中文“故障”) alongside the raw numeric `deviceStatus`
+  (0/1/2, the same code `device list --alarm` filters on) - translated
+  so you don't need to know the mapping.
 - `device counts`/`device health`/`group status` are documented in
   AppHub-v2.3.0.md but the server returns a flat `[{"name":...,"value":...}]`
   array (`"gname"` instead of `"name"` for `group status`); this CLI
@@ -159,7 +164,10 @@ every device-targeting command resolves it against the live device list.
   list` (each is a distinct server-side filter); `--group` can combine with
   any one of them. "Alarm" means the device's combined status
   (`deviceStatus`) is not 0/normal - it's 1 (error) or 2 (warning) on
-  either the software or hardware side.
+  either the software or hardware side. In typical real usage, software
+  alarms are usually things like a monitored process or Docker container
+  having stopped, while hardware alarms are usually resource thresholds
+  such as CPU, memory, or disk having been exceeded.
 - `get-volume`/`set-volume` and `get-backlight`/`set-backlight` use the
   `get_audio`/`set_audio` and `get_brightness`/`set_brightness`
   devicecontrol actions (same resource as the documented reboot/shutdown
@@ -207,10 +215,12 @@ every device-targeting command resolves it against the live device list.
   against a live server, so this CLI converts them to real JSON numbers.
 - `server get-config` isn't scoped to a device - it returns the server's
   own client-onboarding config blob (`{"id":"WP.SRP","data":"<encrypted
-  blob>"}`). Paste `data` directly into a device agent's own
-  configuration UI to connect it to this server - this mirrors the web
-  console's QR-code device-pairing feature (the same blob is what gets
-  encoded into the QR code shown there). Not documented in
+  blob>"}`). When reporting the result back to the user, preserve the
+  full object and do not collapse it to only the `data` string unless the
+  user explicitly asks for just the payload. Paste `data` directly into a
+  device agent's own configuration UI to connect it to this server - this
+  mirrors the web console's QR-code device-pairing feature (the same blob
+  is what gets encoded into the QR code shown there). Not documented in
   AppHub-v2.3.0.md; confirmed against a live server.
 - Every command prints one JSON object to stdout:
   `{"status":200,"msg":"","data":...}` or `{"status":500,"msg":"..."}`, with

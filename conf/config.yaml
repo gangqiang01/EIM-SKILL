@@ -1,8 +1,12 @@
-base_url: https://eim.advantech.com.cn
+base_url: http://172.21.73.146:8080
 username: admin
-password: Admin@2025
-repo_base_url: https://eim.advantech.com.cn:30001
-ithings_base_url: http://eim.advantech.com.cn:8082
+password: admin
+repo_base_url: http://172.21.73.146:30001
+# ithings_base_url intentionally omitted: derived from base_url (same
+# scheme+host, port 8082) - an explicit "http://eim.advantech.com.cn:8082"
+# here previously mismatched base_url's https scheme, causing ithings-backed
+# commands (subdevice ..., device alert history) to fail with "plain HTTP
+# request was sent to HTTPS port".
 
 # eim.advantech.com.cn 的证书由内部私有 CA 签发，不在系统信任链中，
 # 会导致 "x509: certificate signed by unknown authority" 报错。

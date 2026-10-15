@@ -1692,6 +1692,52 @@ func (c *Client) SetDockerContainerMonitored(agentID, containerName string, enab
 	return c.setMonitorListItem(agentID, `{'get_docker_info':true}`, "set_isDockerMonitor", "name", containerName, "container named", enabled)
 }
 
+const (
+	dockerContainerControlObjectPath = "60002/0"
+	dockerStartActionID              = 1009
+	dockerStopActionID               = 1010
+	dockerRestartActionID            = 1011
+)
+
+func dockerContainerControlPath(agentID string, actionID int) string {
+	return fmt.Sprintf("/api/devicemgr/%s/%s/%d", url.PathEscape(agentID), dockerContainerControlObjectPath, actionID)
+}
+
+func (c *Client) controlDockerContainer(agentID, containerName string, actionID int) error {
+	if strings.TrimSpace(containerName) == "" {
+		return fmt.Errorf("DeviceOn-EIM: container name must not be empty")
+	}
+
+	valueBytes, err := json.Marshal(dockerContainerControlValue{
+		PkgName: containerName,
+		Version: "",
+		TaskName: "###",
+		Target:  fmt.Sprintf("/%s/%d", dockerContainerControlObjectPath, actionID),
+	})
+	if err != nil {
+		return err
+	}
+
+	body := execActionRequest{ID: actionID, Value: string(valueBytes)}
+	var sr statusResponse
+	return c.do(http.MethodPut, dockerContainerControlPath(agentID, actionID), body, &sr)
+}
+
+// StartDockerContainer starts one Docker container by name on a device.
+func (c *Client) StartDockerContainer(agentID, containerName string) error {
+	return c.controlDockerContainer(agentID, containerName, dockerStartActionID)
+}
+
+// StopDockerContainer stops one Docker container by name on a device.
+func (c *Client) StopDockerContainer(agentID, containerName string) error {
+	return c.controlDockerContainer(agentID, containerName, dockerStopActionID)
+}
+
+// RestartDockerContainer restarts one Docker container by name on a device.
+func (c *Client) RestartDockerContainer(agentID, containerName string) error {
+	return c.controlDockerContainer(agentID, containerName, dockerRestartActionID)
+}
+
 func (c *Client) GetThresholds(agentID string) ([]ThresholdSetting, error) {
 	raw, err := c.getPluginAction(agentID, `{'get_threshold':true}`)
 	if err != nil {

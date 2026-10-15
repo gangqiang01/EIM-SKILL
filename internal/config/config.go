@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -37,21 +38,15 @@ type Config struct {
 
 // Load reads configuration from (in increasing priority order): defaults,
 // the config file at configPath (if it exists), and EIM_* environment
-// variables (EIM_BASE_URL, EIM_USERNAME, EIM_PASSWORD, EIM_REPO_BASE_URL).
+// variables (EIM_BASE_URL, EIM_USERNAME, EIM_PASSWORD, EIM_REPO_BASE_URL,
+// EIM_ITHINGS_BASE_URL). If repo_base_url/ithings_base_url end up unset
+// after that, each is derived from base_url instead of a fixed default -
+// see deriveCompanionURL.
 func Load(configPath string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("base_url", "http://127.0.0.1:30010")
 	v.SetDefault("username", "admin")
 	v.SetDefault("password", "admin")
-	// m2m-management-edge, the repo server behind OTA package storage. It
-	// runs alongside DeviceLink and accepts the same accesstoken issued by
-	// base_url's /login.
-	v.SetDefault("repo_base_url", "http://127.0.0.1:30001")
-	// apphub-ithings, the sub-device/digital-twin server (LwM2M-managed
-	// "things" registered under a parent device). Runs alongside DeviceLink
-	// on port 8082 and accepts the same accesstoken issued by base_url's
-	// /login - confirmed against a live server.
-	v.SetDefault("ithings_base_url", "http://127.0.0.1:8082")
 
 	v.SetEnvPrefix("EIM")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -70,7 +65,43 @@ func Load(configPath string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+
+	// m2m-management-edge, the repo server behind OTA package storage, and
+	// apphub-ithings, the sub-device/digital-twin server - both run
+	// alongside the main DeviceLink server (base_url) on their own port and
+	// accept the same accesstoken issued by base_url's /login. When not set
+	// explicitly, derive each from base_url (same scheme+host, its own
+	// port) rather than assuming a fixed host - a bare port-only default
+	// silently mismatched base_url's scheme (e.g. base_url on https with
+	// ithings_base_url left at a hardcoded http://127.0.0.1:8082),
+	// producing a confusing "plain HTTP request sent to HTTPS port" error.
+	if cfg.RepoBaseURL == "" {
+		derived, err := deriveCompanionURL(cfg.BaseURL, "30001")
+		if err != nil {
+			return nil, fmt.Errorf("config: deriving repo_base_url from base_url %q: %w", cfg.BaseURL, err)
+		}
+		cfg.RepoBaseURL = derived
+	}
+	if cfg.IthingsBaseURL == "" {
+		derived, err := deriveCompanionURL(cfg.BaseURL, "8082")
+		if err != nil {
+			return nil, fmt.Errorf("config: deriving ithings_base_url from base_url %q: %w", cfg.BaseURL, err)
+		}
+		cfg.IthingsBaseURL = derived
+	}
+
 	return &cfg, nil
+}
+
+// deriveCompanionURL builds a companion server URL from baseURL - same
+// scheme and hostname, with its port replaced by port.
+func deriveCompanionURL(baseURL, port string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	u.Host = u.Hostname() + ":" + port
+	return u.String(), nil
 }
 
 // NewHTTPClient builds the *http.Client every server client (AppHub, repo,

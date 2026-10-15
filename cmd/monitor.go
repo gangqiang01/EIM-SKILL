@@ -299,6 +299,97 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 	},
 }
 
+// alert history
+
+var deviceAlertCmd = &cobra.Command{
+	Use:   "alert",
+	Short: "Query a device's recorded alert history (hardware/software/peripheral)",
+	Long: `Query the alert-history records DeviceOn-EIM has stored for a device -
+distinct from "device threshold get/set", which configures the
+thresholds that generate these alerts, not the alert records themselves.
+
+查询 DeviceOn-EIM 为某台设备保存的告警历史记录——和 "device threshold
+get/set"（配置产生告警的阈值，而非告警记录本身）是两回事。`,
+}
+
+var deviceAlertHistoryCmd = &cobra.Command{
+	Use:   "history <endpoint-or-name>",
+	Short: "List a device's recorded alert-history entries",
+	Long: `List one page of a device's recorded alert-history entries. --type
+narrows to one alert category (hardware/software/peripheral, going by a
+real request URL - the full accepted set isn't confirmed) and --level
+narrows to one severity level (server-defined); both are passed through
+to the server as-is, and either may be left empty to not filter on it.
+
+列出设备的告警历史记录（分页）。--type 可按告警类别过滤（hardware/
+software/peripheral——来自一次真实请求的URL，完整取值范围未经确认），
+--level 可按告警级别过滤（具体取值由服务器定义）；两者都原样透传给
+服务器，留空即不按该条件过滤。
+
+Restrict the time range with either --last (a recent relative period,
+e.g. "30m", "12h", "3d") or --begin/--end (an absolute range, RFC3339 or
+"YYYY-MM-DD HH:MM" - either or both may be given; mutually exclusive with
+--last).
+
+可以用 --last（最近一段相对时间，如 "30m"/"12h"/"3d"）或者
+--begin/--end（绝对时间区间，RFC3339 或 "YYYY-MM-DD HH:MM"——可以只填
+一个也可以两个都填；不能和 --last 同时使用）来限定时间范围。
+
+CAVEAT: this endpoint (GET /v1/alertHistory/byPage/condition, on the
+apphub-ithings server) is not documented in AppHub-v2.3.0.md; the request
+shape (query parameter names, this help text's flags) comes from a real
+request URL, but no populated response was available during development
+to confirm the returned entries' exact field names (the only reachable
+test server rejected every credential tried), so each entry is passed
+through as raw JSON rather than reshaped into named fields - inspect the
+raw output once against your own server and treat this note as stale if
+it no longer matches.
+
+注意：这个接口（GET /v1/alertHistory/byPage/condition，位于
+apphub-ithings 服务上）未在 AppHub-v2.3.0.md 中记录；请求参数名来自一次
+真实请求的URL，但开发时未能用真实有数据的返回结果验证每条记录的具体
+字段名（当时唯一能连通的测试服务器没有一个可用凭据能通过鉴权），因此
+这里直接透传原始JSON，不做重新整形——请在你自己的服务器上实际跑一次，
+用真实返回核对字段，如与本说明不符以实际为准。
+
+Example 示例: eim-skill device alert history "146打包机" --type hardware --last 7d
+       eim-skill device alert history "28:16:AD:F2:56:5C" --type software --level 2 --page 1 --limit 10`,
+	Args: requireArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		page, _ := cmd.Flags().GetInt("page")
+		limit, _ := cmd.Flags().GetInt("limit")
+		level, _ := cmd.Flags().GetString("level")
+		alertType, _ := cmd.Flags().GetString("type")
+		begin, end, err := resolveTimeWindow(cmd)
+		if err != nil {
+			return err
+		}
+
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		ithingsClient, err := newIthingsClient(client)
+		if err != nil {
+			return err
+		}
+
+		alerts, total, err := ithingsClient.ListAlertHistory(endpoint, page, limit, level, alertType, begin, end)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]interface{}{
+			"total":  total,
+			"alerts": alerts,
+		})
+		return nil
+	},
+}
+
 // process monitoring
 
 var deviceProcessCmd = &cobra.Command{
@@ -472,11 +563,12 @@ var deviceDockerCmd = &cobra.Command{
 	Short: "List a device's Docker containers, and add/remove ones selected for monitoring",
 	Long: `List every Docker container on a device ("list"), just the ones
 currently selected for monitoring ("monitored"), or add/remove a specific
-container (by name) to/from that monitored list ("set-monitor").
+container (by name) to/from that monitored list ("set-monitor"). Also
+supports runtime control for one container: start, stop, and restart.
 
 列出设备上所有 Docker 容器（"list"），只列出当前被选中监控的容器
 （"monitored"），或者把某个容器（按名称）加入/移出监控列表
-（"set-monitor"）。`,
+（"set-monitor"）。另外也支持单个容器的运行控制：start、stop、restart。`,
 }
 
 var deviceDockerListCmd = &cobra.Command{
@@ -632,6 +724,108 @@ Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHAN
 			return err
 		}
 		if err := client.SetDockerContainerMonitored(endpoint, args[1], enabled); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceDockerStartCmd = &cobra.Command{
+	Use:   "start <endpoint-or-name> <container-name>",
+	Short: "Start one Docker container on a device",
+	Long: `Start one Docker container by name on a device.
+
+按名称启动设备上的单个 Docker 容器。
+
+Uses PUT /api/devicemgr/{agentId}/60002/0/1009 with body
+{"id":1009,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1009\"}"}.
+
+使用 PUT /api/devicemgr/{agentId}/60002/0/1009，请求体为
+{"id":1009,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1009\"}"}。
+
+Example 示例: eim-skill device docker start "146打包机" sdk440llminfer123
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(2)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.StartDockerContainer(endpoint, args[1]); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceDockerStopCmd = &cobra.Command{
+	Use:   "stop <endpoint-or-name> <container-name>",
+	Short: "Stop one Docker container on a device",
+	Long: `Stop one Docker container by name on a device.
+
+按名称停止设备上的单个 Docker 容器。
+
+Uses PUT /api/devicemgr/{agentId}/60002/0/1010 with body
+{"id":1010,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1010\"}"}.
+
+使用 PUT /api/devicemgr/{agentId}/60002/0/1010，请求体为
+{"id":1010,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1010\"}"}。
+
+Example 示例: eim-skill device docker stop "146打包机" sdk440llminfer123
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(2)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.StopDockerContainer(endpoint, args[1]); err != nil {
+			return err
+		}
+		printJSON(map[string]string{"status": "CHANGED"})
+		return nil
+	},
+}
+
+var deviceDockerRestartCmd = &cobra.Command{
+	Use:   "restart <endpoint-or-name> <container-name>",
+	Short: "Restart one Docker container on a device",
+	Long: `Restart one Docker container by name on a device.
+
+按名称重启设备上的单个 Docker 容器。
+
+Uses PUT /api/devicemgr/{agentId}/60002/0/1011 with body
+{"id":1011,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1011\"}"}.
+
+使用 PUT /api/devicemgr/{agentId}/60002/0/1011，请求体为
+{"id":1011,"value":"{\"pkgname\":...,\"version\":\"\",\"taskname\":\"###\",\"target\":\"/60002/0/1011\"}"}。
+
+Example 示例: eim-skill device docker restart "146打包机" sdk440llminfer123
+
+Example output 输出示例: {"status": 200, "msg": "", "data": {"status": "CHANGED"}}`,
+	Args: requireArgs(cobra.ExactArgs(2)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newClient()
+		if err != nil {
+			return err
+		}
+		endpoint, err := resolveDeviceEndpoint(client, args[0])
+		if err != nil {
+			return err
+		}
+		if err := client.RestartDockerContainer(endpoint, args[1]); err != nil {
 			return err
 		}
 		printJSON(map[string]string{"status": "CHANGED"})
@@ -894,6 +1088,14 @@ func init() {
 	deviceThresholdSetCmd.Flags().Float64("warn", 0, "warning level (告警阈值)")
 	deviceThresholdSetCmd.Flags().Float64("error", 0, "error level (错误阈值)")
 
+	deviceCmd.AddCommand(deviceAlertCmd)
+	deviceAlertCmd.AddCommand(deviceAlertHistoryCmd)
+	addTimeWindowFlags(deviceAlertHistoryCmd)
+	deviceAlertHistoryCmd.Flags().String("type", "", `alert category filter: "hardware", "software", or "peripheral" (empty = no filter) - 告警类别过滤：hardware(硬件)/software(软件)/peripheral(外设)，留空则不过滤`)
+	deviceAlertHistoryCmd.Flags().String("level", "", "alert severity level filter, server-defined (empty = no filter) - 告警级别过滤，具体取值由服务器定义（留空则不过滤）")
+	deviceAlertHistoryCmd.Flags().Int("page", 1, "page number, 1-based (页码，从1开始)")
+	deviceAlertHistoryCmd.Flags().Int("limit", 20, "how many entries per page (每页返回多少条)")
+
 	deviceCmd.AddCommand(deviceProcessCmd)
 	deviceProcessCmd.AddCommand(deviceProcessListCmd)
 	deviceProcessCmd.AddCommand(deviceProcessMonitoredCmd)
@@ -903,6 +1105,9 @@ func init() {
 	deviceDockerCmd.AddCommand(deviceDockerListCmd)
 	deviceDockerCmd.AddCommand(deviceDockerMonitoredCmd)
 	deviceDockerCmd.AddCommand(deviceDockerSetMonitorCmd)
+	deviceDockerCmd.AddCommand(deviceDockerStartCmd)
+	deviceDockerCmd.AddCommand(deviceDockerStopCmd)
+	deviceDockerCmd.AddCommand(deviceDockerRestartCmd)
 
 	deviceCmd.AddCommand(deviceUsbCmd)
 	deviceUsbCmd.AddCommand(deviceUsbGetMonitorCmd)
