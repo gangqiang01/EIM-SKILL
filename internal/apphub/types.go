@@ -305,10 +305,10 @@ type monitorListValue struct {
 // where id maps to start/stop/restart. pkgname carries the container name;
 // version and taskname are fixed placeholders per server behavior.
 type dockerContainerControlValue struct {
-	PkgName string `json:"pkgname"`
-	Version string `json:"version"`
+	PkgName  string `json:"pkgname"`
+	Version  string `json:"version"`
 	TaskName string `json:"taskname"`
-	Target  string `json:"target"`
+	Target   string `json:"target"`
 }
 
 // execBatchRequest is the body for the batch-execute devicecontrol
@@ -824,6 +824,123 @@ type systemLogsPageResponse struct {
 
 type deleteByDeviceIDRequest struct {
 	DeviceID string `json:"deviceId"`
+}
+
+// --- device asset / maintenance / inspection / repair / spare part ----------
+
+// rawPageResponse is the shared wrapper for the five asset/record byPage
+// endpoints: {"count":<n>,"data":...}. The shape of "data" differs by servlet
+// (confirmed against the live server):
+//
+//   - DeviceAssetInfoServlet and SparePartServlet build it as
+//     result.put("data", json) where json is a gson String. net.sf.json's
+//     JSONObject auto-parses a JSON-looking string value into a real array,
+//     so "data" arrives as a real JSON array: [{"..."},{"..."}].
+//   - MaintenanceRecord/InspectionRecord/RepairRecordServlet build it as
+//     result.put("data", data.toString()) - an explicit toString() defeats the
+//     auto-parse, so "data" arrives as a double-encoded JSON string:
+//     "[{\"...\"},{\"...\"}]".
+//
+// doGetPage handles both shapes by decoding into a json.RawMessage first.
+type rawPageResponse struct {
+	Count int64           `json:"count"`
+	Data  json.RawMessage `json:"data"`
+}
+
+// DeviceAssetInfo is one device-asset (设备台账) row. Dates are Unix millis
+// as the server stores/returns them; warrantyStatus is derived server-side
+// by comparing warrantyEndDate to "now" ("" when no warranty date, else
+// "在保"/"过保"). devName
+// is joined from the live device list ("" when the deviceId has no
+// registered device).
+type DeviceAssetInfo struct {
+	ID                int64  `json:"id"`
+	DeviceID          string `json:"deviceId"`
+	DevName           string `json:"devName"`
+	SN                string `json:"sn"`
+	Vendor            string `json:"vendor"`
+	Manufacturer      string `json:"manufacturer"`
+	CustomerCode      string `json:"customerCode"`
+	PurchaseDate      *int64 `json:"purchaseDate"`
+	WorkshopLocation  string `json:"workshopLocation"`
+	ResponsiblePerson string `json:"responsiblePerson"`
+	AssetStatus       string `json:"assetStatus"`
+	Remark            string `json:"remark"`
+	WarrantyEndDate   *int64 `json:"warrantyEndDate"`
+	WarrantyStatus    string `json:"warrantyStatus"`
+	RepairMode        string `json:"repairMode"`
+	MaintenanceMode   string `json:"maintenanceMode"`
+	Ts                *int64 `json:"ts"`
+}
+
+// MaintenanceRecord is one 保养 record. status: 0=未保养, 1=已保养.
+// startTime/endTime/ts are Unix millis. deviceName is joined from the live
+// device list ("").
+type MaintenanceRecord struct {
+	ID              int64  `json:"id"`
+	DeviceID        string `json:"deviceId"`
+	DeviceName      string `json:"deviceName"`
+	StartTime       *int64 `json:"startTime"`
+	EndTime         *int64 `json:"endTime"`
+	Provider        string `json:"provider"`
+	ResponsibleName string `json:"responsibleName"`
+	Content         string `json:"content"`
+	Remark          string `json:"remark"`
+	Status          *int   `json:"status"`
+	Ts              *int64 `json:"ts"`
+}
+
+// InspectionRecord is one 巡检 record. status: 0=未巡检, 1=已巡检 (NULL on
+// historical rows means 未巡检). date/ts are Unix millis. deviceName is
+// joined from the live device list ("").
+type InspectionRecord struct {
+	ID               int64  `json:"id"`
+	DeviceID         string `json:"deviceId"`
+	DeviceName       string `json:"deviceName"`
+	Date             *int64 `json:"date"`
+	ResponsibleParty string `json:"responsibleParty"`
+	Mode             string `json:"mode"`
+	Remark           string `json:"remark"`
+	Status           *int   `json:"status"`
+	Ts               *int64 `json:"ts"`
+}
+
+// RepairRecord is one 维修 record. There is no status field. startTime/
+// endTime/ts are Unix millis. deviceName is joined from the live device
+// list ("").
+type RepairRecord struct {
+	ID          int64  `json:"id"`
+	DeviceID    string `json:"deviceId"`
+	DeviceName  string `json:"deviceName"`
+	Description string `json:"description"`
+	StartTime   *int64 `json:"startTime"`
+	EndTime     *int64 `json:"endTime"`
+	Provider    string `json:"provider"`
+	Result      string `json:"result"`
+	Remark      string `json:"remark"`
+	SpareParts  string `json:"spareParts"`
+	Ts          *int64 `json:"ts"`
+}
+
+// SparePart is one 备品 (spare-part inventory) row. status is a free string
+// (unlike the record family, whose status is an int). deviceNames/
+// deviceIds list the devices currently associated with this part (populated
+// by the byPage/all endpoints' join, not persisted on the part itself).
+type SparePart struct {
+	ID                int64    `json:"id"`
+	DeviceID          string   `json:"deviceId"`
+	Name              string   `json:"name"`
+	Vendor            string   `json:"vendor"`
+	Manufacturer      string   `json:"manufacturer"`
+	CustomerCode      string   `json:"customerCode"`
+	SN                string   `json:"sn"`
+	Location          string   `json:"location"`
+	ResponsiblePerson string   `json:"responsiblePerson"`
+	Status            string   `json:"status"`
+	Description       string   `json:"description"`
+	DeviceNames       []string `json:"deviceNames"`
+	DeviceIDs         []string `json:"deviceIds"`
+	Ts                *int64   `json:"ts"`
 }
 
 // BoardInfo is a device's board-level monitoring snapshot (devicecontrol

@@ -1709,10 +1709,10 @@ func (c *Client) controlDockerContainer(agentID, containerName string, actionID 
 	}
 
 	valueBytes, err := json.Marshal(dockerContainerControlValue{
-		PkgName: containerName,
-		Version: "",
+		PkgName:  containerName,
+		Version:  "",
 		TaskName: "###",
-		Target:  fmt.Sprintf("/%s/%d", dockerContainerControlObjectPath, actionID),
+		Target:   fmt.Sprintf("/%s/%d", dockerContainerControlObjectPath, actionID),
 	})
 	if err != nil {
 		return err
@@ -2074,4 +2074,138 @@ func (c *Client) ListSystemLogs(currentPage, limit int, deviceID, os, keywords, 
 // DeleteSystemLogsByDevice deletes every system log entry for a device.
 func (c *Client) DeleteSystemLogsByDevice(deviceID string) error {
 	return c.do(http.MethodPost, "/api/systemLog/deleteByDeviceId", deleteByDeviceIDRequest{DeviceID: deviceID}, nil)
+}
+
+// --- device asset / maintenance / inspection / repair / spare part ----------
+
+// The five "asset/record" management endpoints below are not documented in
+// AppHub-v2.3.0.md - reverse-engineered from their servlet/bean sources.
+// Each is a GET /api/<thing>/byPage that returns {"count":<n>,"data":...}.
+// The "data" field is server-shaped inconsistently (see rawPageResponse):
+// a real JSON array for the asset and spare-part servlets, a double-encoded
+// JSON string for the maintenance/inspection/repair servlets. currentPage is
+// 1-based (the server computes offset = limit * (currentPage - 1)); limit
+// caps rows/page. deviceID, when given, is the endpoint id (resolve it from a
+// device name via the cmd layer first). The generic doGetPage helper issues
+// the request and decodes "data" into rows of type T, handling both shapes.
+
+// doGetPage fetches a byPage endpoint whose body is {"count","data"} and
+// decodes data into []T, whether the server sent a real JSON array (asset,
+// spare) or a double-encoded JSON string (maintenance/inspection/repair).
+func doGetPage[T any](c *Client, path string, rows *[]T) (int64, error) {
+	var page rawPageResponse
+	if err := c.do(http.MethodGet, path, nil, &page); err != nil {
+		return 0, err
+	}
+	if len(page.Data) == 0 || string(page.Data) == "null" {
+		*rows = nil
+		return page.Count, nil
+	}
+	// First try unmarshalling data directly into []T (the asset/spare servlets
+	// send a real JSON array here).
+	if err := json.Unmarshal(page.Data, rows); err == nil {
+		return page.Count, nil
+	}
+	// Fall back: data is a double-encoded JSON string (the maintenance/
+	// inspection/repair servlets). Unmarshal it into a string, then decode that
+	// string into []T.
+	var dataStr string
+	if err := json.Unmarshal(page.Data, &dataStr); err != nil {
+		return 0, fmt.Errorf("DeviceOn-EIM: decode %s data: %w", path, err)
+	}
+	if dataStr == "" {
+		*rows = nil
+		return page.Count, nil
+	}
+	if err := json.Unmarshal([]byte(dataStr), rows); err != nil {
+		return 0, fmt.Errorf("DeviceOn-EIM: decode %s data: %w", path, err)
+	}
+	return page.Count, nil
+}
+
+func byPageQuery(currentPage, limit int, kv map[string]string) string {
+	q := url.Values{}
+	q.Set("currentPage", fmt.Sprintf("%d", currentPage))
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	for k, v := range kv {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	return q.Encode()
+}
+
+// GetDeviceAssetInfo returns one 设备台账 (device-asset) row by endpoint id,
+// via the single-device endpoint GET /api/deviceasset/{endpoint}. The byPage
+// endpoint cannot filter by device (its keywords only match sn/vendor/
+// manufacturer), so this is the way to look up a specific device's ledger
+// record - resolve the device name to an endpoint id in the cmd layer first.
+// Returns an error if the device has no asset record.
+func (c *Client) GetDeviceAssetInfo(deviceID string) (*DeviceAssetInfo, error) {
+	var info DeviceAssetInfo
+	if err := c.do(http.MethodGet, "/api/deviceasset/"+url.PathEscape(deviceID), nil, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// ListDeviceAssetInfo returns a page of 设备台账 (device-asset) rows. keywords
+// is an optional server-side LIKE match on sn / vendor / manufacturer (NOT the
+// device name - use GetDeviceAssetInfo to look up a specific device by name).
+func (c *Client) ListDeviceAssetInfo(currentPage, limit int, keywords string) (int64, []DeviceAssetInfo, error) {
+	var rows []DeviceAssetInfo
+	count, err := doGetPage[DeviceAssetInfo](c, "/api/deviceasset/byPage?"+byPageQuery(currentPage, limit, map[string]string{"keywords": keywords}), &rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, rows, nil
+}
+
+// ListMaintenanceRecords returns a page of 保养 records. deviceID and keywords
+// are optional; keywords matches workContent (the "content" field). status is
+// "0"=未保养 / "1"=已保养; pass "" to leave the status filter unset.
+func (c *Client) ListMaintenanceRecords(currentPage, limit int, deviceID, keywords, status string) (int64, []MaintenanceRecord, error) {
+	var rows []MaintenanceRecord
+	count, err := doGetPage[MaintenanceRecord](c, "/api/maintenancerecord/byPage?"+byPageQuery(currentPage, limit, map[string]string{"deviceId": deviceID, "keywords": keywords, "status": status}), &rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, rows, nil
+}
+
+// ListInspectionRecords returns a page of 巡检 records. deviceID and keywords
+// are optional; keywords matches remark. status is "0"=未巡检 / "1"=已巡检;
+// pass "" to leave the status filter unset.
+func (c *Client) ListInspectionRecords(currentPage, limit int, deviceID, keywords, status string) (int64, []InspectionRecord, error) {
+	var rows []InspectionRecord
+	count, err := doGetPage[InspectionRecord](c, "/api/inspectionrecord/byPage?"+byPageQuery(currentPage, limit, map[string]string{"deviceId": deviceID, "keywords": keywords, "status": status}), &rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, rows, nil
+}
+
+// ListRepairRecords returns a page of 维修 records. deviceID and keywords are
+// optional; keywords matches faultDescription (the "description" field). Repair
+// records have no status field.
+func (c *Client) ListRepairRecords(currentPage, limit int, deviceID, keywords string) (int64, []RepairRecord, error) {
+	var rows []RepairRecord
+	count, err := doGetPage[RepairRecord](c, "/api/repairrecord/byPage?"+byPageQuery(currentPage, limit, map[string]string{"deviceId": deviceID, "keywords": keywords}), &rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, rows, nil
+}
+
+// ListSpareParts returns a page of 备品 (spare-part) rows. keywords matches
+// name / sn / vendor; deviceID and status are optional (status is a free
+// string, not an int). The byPage endpoint also populates each row's
+// deviceNames/deviceIds (the devices associated with the part).
+func (c *Client) ListSpareParts(currentPage, limit int, keywords, deviceID, status string) (int64, []SparePart, error) {
+	var rows []SparePart
+	count, err := doGetPage[SparePart](c, "/api/sparepart/byPage?"+byPageQuery(currentPage, limit, map[string]string{"keywords": keywords, "deviceId": deviceID, "status": status}), &rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, rows, nil
 }

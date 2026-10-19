@@ -14,15 +14,16 @@ LDFLAGS := -w -s \
 
 .PHONY: all install clean cross linux-amd64 linux-arm64 windows-amd64 package
 
-all: $(TARGETBIN)
+all: $(DIST_DIR)/$(TARGETBIN)
 
-$(TARGETBIN):
+$(DIST_DIR)/$(TARGETBIN):
+	@mkdir -p $(DIST_DIR)
 	@gofmt -l -w $(BUILD_ROOT)/cmd $(BUILD_ROOT)/internal $(BUILD_ROOT)/main.go
 	go build -ldflags "$(LDFLAGS)" -o $@ .
 
 install: all
 	@mkdir -p out
-	@cp -a conf $(TARGETBIN) out/
+	@cp -a conf $(DIST_DIR)/$(TARGETBIN) out/
 	@echo "[Done]"
 
 # Cross-compiled release binaries, written to dist/.

@@ -1,6 +1,6 @@
 ---
 name: device-management
-description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceOn-EIM, control individual devices - reboot, shutdown, set volume/backlight, trigger a time sync, add a device to a group, or delete a device - and get the server's own client-onboarding config for pairing new device agents. Use this whenever the user asks to look up, list, group, or remotely control a DeviceOn-EIM-managed device, or wants to connect/pair a new device agent, via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、时间同步、设备配对、二维码配置、客户端连接。
+description: Query devices (including filtering dynamically by online/offline/alarm state, all devices or scoped to one group) and device groups managed by DeviceOn-EIM, control individual devices - reboot, shutdown, set volume/backlight, trigger a time sync, add a device to a group, or delete a device - query the five device-management record families (device asset ledger/台账, maintenance/保养, inspection/巡检, repair/维修, spare parts/备品) filtered by device name, keyword, and status, and get the server's own client-onboarding config for pairing new device agents. Use this whenever the user asks to look up, list, group, or remotely control a DeviceOn-EIM-managed device, to look up its asset/ledger record or its maintenance/inspection/repair history or spare-part inventory, or wants to connect/pair a new device agent, via the eim-skill CLI. 中文触发词：设备管理、设备列表、查询设备、在线设备、离线设备、告警设备、设备组、创建设备组、添加设备到组、删除设备、重启设备、关机、设置音量、设置背光/亮度、时间同步、设备配对、二维码配置、客户端连接、设备台账、资产台账、设备资产、备品、备件、维修记录、保养记录、巡检记录、查设备台账、查保养、查巡检、查维修。
 ---
 
 # Device management
@@ -61,6 +61,11 @@ x86_64 主机上，且执行时的工作目录就是这个文件所在的目录�
 - "How many online/warning/error devices does group X have" / "指定设备组下有几个在线设备，几个告警设备" → `group status X`
 - "Create a new device group" / "创建设备组" / "添加设备组" → `group create`
 - "How do I connect/pair a new device to the server" / "怎么把新设备连接/配对到服务器" → `server get-config`
+- "What's the asset/ledger record for device X (sn, vendor, warranty dates, in/out of warranty)" / "查设备X的台账/资产信息" / "设备X在保吗" → `asset list --device X` (resolves the name to an endpoint id and fetches that one device's ledger record; without `--device` it lists all rows and `--keywords` matches sn/vendor/manufacturer, NOT the device name)
+- "List the maintenance / 保养 records (all, or for device X, or 未保养/已保养)" / "查保养记录" / "设备X的保养记录" / "哪些设备未保养" → `asset maintenance list` [`--device X` `--keywords <substr>` `--status <0|1>`] (row field `status`: 0=未保养/1=已保养; if the server seems to ignore `--status`, filter the rows client-side on that field)
+- "List the inspection / 巡检 records (all, or for device X, or 未巡检/已巡检)" / "查巡检记录" / "设备X的巡检记录" / "哪些设备未巡检" → `asset inspection list` [`--device X` `--keywords <substr>` `--status <0|1>`] (row field `status`: 0=未巡检/1=已巡检; if the server seems to ignore `--status`, filter the rows client-side on that field)
+- "List the repair / 维修 records (all, or for device X, or matching a fault description)" / "查维修记录" / "设备X的维修记录" → `asset repair list` [`--device X` `--keywords <substr>`] (no `status` field, request or response)
+- "List the spare parts / 备品 (all, or for device X, or matching a name/sn)" / "查备品" / "备件清单" / "设备X用了哪些备品" → `asset spare list` [`--device X` `--keywords <substr>` `--status <str>`] (row field `status`: free string, e.g. inUse/在库)
 
 ## Commands
 
@@ -105,6 +110,20 @@ x86_64 主机上，且执行时的工作目录就是这个文件所在的目录�
 ../../eim-skill device set-volume-group <group-name> <0-100> [--label <name>]
 ../../eim-skill device set-backlight-group <group-name> <0-100> [--label <name>]
 ../../eim-skill device sync-time <endpoint-or-name>
+
+# device-management record families (read-only queries)
+../../eim-skill asset list [--device <endpoint-or-name>] [--keywords <substr>] [--page N] [--limit N]
+  # 设备台账. With --device: that one device's ledger record (name is resolved
+  # to an endpoint id first). Without: all rows; --keywords matches
+  # sn/vendor/manufacturer only, NOT the device name.
+../../eim-skill asset maintenance list [--device <endpoint-or-name>] [--keywords <substr>]
+                         [--status <0|1>] [--page N] [--limit N]      # 保养. status 0=未保养 1=已保养 (req flag + resp row field; server wants array [0,1], scalar unreliable - see notes)
+../../eim-skill asset inspection list [--device <endpoint-or-name>] [--keywords <substr>]
+                        [--status <0|1>] [--page N] [--limit N]      # 巡检. status 0=未巡检 1=已巡检 (req flag + resp row field; server wants array [0,1], scalar unreliable - see notes)
+../../eim-skill asset repair list [--device <endpoint-or-name>] [--keywords <substr>]
+                      [--page N] [--limit N]                         # 维修 (no status field, request or response)
+../../eim-skill asset spare list [--device <endpoint-or-name>] [--keywords <substr>]
+                       [--status <str>] [--page N] [--limit N]       # 备品. status is a free string (req flag + resp row field, e.g. inUse/在库)
 
 ../../eim-skill server get-config                                     # client-onboarding config blob (not device-scoped)
 ```
@@ -222,6 +241,68 @@ every device-targeting command resolves it against the live device list.
   mirrors the web console's QR-code device-pairing feature (the same blob
   is what gets encoded into the QR code shown there). Not documented in
   AppHub-v2.3.0.md; confirmed against a live server.
+- The `asset` family (台账/保养/巡检/维修/备品) is not documented in
+  AppHub-v2.3.0.md - reverse-engineered from the server's servlet/bean
+  sources (`DeviceAssetInfoServlet`, `MaintenanceRecordServlet`,
+  `InspectionRecordServlet`, `RepairRecordServlet`, `SparePartServlet`). These
+  endpoints are only present on newer server builds: if a target server
+  predates them, `asset ...` returns an HTTP 404 ("Not Found", `SERVLET:
+  default`) rather than data - confirmed live against an older build, and the
+  same commands work against the newer build. All five are read-only
+  queries (no confirm step, unlike the reboot/shutdown commands).
+- Every `asset ... list` command returns `data` as `{"count":<total rows
+  across all pages>,"data":[...current page's rows...]}`. `count` can be
+  larger than the page you got - use `--limit`/`--page` to page through the
+  rest rather than assuming one call returned everything. `--page` is
+  1-based.
+- `--keywords` on each `asset` command matches a *different* server-side field
+  (a substring LIKE, case-sensitive): 台账 `asset list` matches sn/vendor/
+  manufacturer; 保养 `asset maintenance list` matches the work content
+  (`content`); 巡检 `asset inspection list` matches `remark`; 维修 `asset
+  repair list` matches the fault description (`description`); 备品 `asset
+  spare list` matches name/sn/vendor. It is never the device name - use
+  `--device` for that.
+- `asset list --device <name>` is the only way to fetch one specific device's
+  ledger row: the ledger's `byPage` endpoint cannot filter by device, so this
+  resolves the name to an endpoint id and calls the single-record endpoint
+  (`GET /api/deviceasset/{endpoint}`) instead. The record families
+  (maintenance/inspection/repair/spare) *can* filter by device, so their
+  `--device` goes through the same `byPage` endpoint.
+- The record families carry a `status` field, but it appears in **two
+  different places** - don't conflate them:
+  - **Request flag** `--status` on 保养/巡检 is the server-side filter you
+    ask for. 保养: `0`=未保养, `1`=已保养. 巡检: `0`=未巡检, `1`=已巡检.
+    维修 has no request status. 备品 `--status` is a free string (the
+    part's own 状态, e.g. `inUse`), not the int 0/1 family.
+  - **Response row field** `status` on each returned row is the record's
+    actual state, *the same 0/1 codes*: 保养 row `status` `0`=未保养 /
+    `1`=已保养; 巡检 row `status` `0`=未巡检 / `1`=已巡检. Historical
+    rows may return `null` (treat 未巡检/未保养). 维修 rows have no
+    `status` field at all. 备品 row `status` is the same free string the
+    request flag filters on (e.g. `inUse`/`在库`).
+  So "filter 未保养" = `--status 0` (request); "is this row 未保养?" = its
+  `status` field is `0` (response). They use the same codes but live in
+  different slots.
+- Date fields (`startTime`, `endTime`, `date`, `ts`, and the ledger's
+  `purchaseDate`/`warrantyEndDate`) are Unix milliseconds. The ledger's
+  `warrantyStatus` is derived server-side: `""` (no date), `在保`, or
+  `过保`.
+- **The server's `status` *request* filter on 保养/巡检 is broken on at
+  least some builds** (confirmed against a live server): sending
+  `status=1` or `status=0` returns the *same* `count` and the *same*
+  unfiltered rows as sending no status filter (the HQL builds a
+  `where m.status = :status` clause, but it's not taking effect - all
+  rows come back regardless, mixed `0`/`1`/`null`). Note the server's
+  documented query shape is the array `status=[0,1]` (send both to mean
+  "未+已 together"); sending a scalar `status=0`/`status=1` is the
+  unreliable case. Treat `--status` on `asset maintenance list` /
+  `asset inspection list` as **best-effort**: it's sent to the server,
+  but the server may ignore it - for a guaranteed-accurate result, filter
+  the returned rows client-side on their `status` field (the response
+  row field above). `--keywords` (substring match) and `--device` on
+  these same commands *do* work server-side. The 备品 `--status` (free
+  string, not the int 0/1 family) *does* filter correctly server-side
+  (confirmed live: `status=inUse` returns only in-use parts).
 - Every command prints one JSON object to stdout:
   `{"status":200,"msg":"","data":...}` or `{"status":500,"msg":"..."}`, with
   exit code 0/1 to match - safe to script against.

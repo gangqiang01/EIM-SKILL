@@ -1,7 +1,7 @@
-base_url: http://172.21.73.146:8080
+base_url: http://172.21.84.172:8080
 username: admin
 password: admin
-repo_base_url: http://172.21.73.146:30001
+repo_base_url: http://172.21.84.172:30001
 # ithings_base_url intentionally omitted: derived from base_url (same
 # scheme+host, port 8082) - an explicit "http://eim.advantech.com.cn:8082"
 # here previously mismatched base_url's https scheme, causing ithings-backed
